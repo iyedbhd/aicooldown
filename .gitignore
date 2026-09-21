@@ -29,5 +29,6 @@ yarn-error.log*
 .pnpm-debug.log*
 /coverage
 
-# personal launch notes, not part of the project
+# personal launch notes and editor/tool config, not part of the project
 LAUNCH.md
+.claude/
