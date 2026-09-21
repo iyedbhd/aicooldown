@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 64" width="600" height="128" role="img" aria-label="AI Cooldown">
+  <title>AI Cooldown</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#141c38"/>
+      <stop offset="1" stop-color="#080c1a"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#ff4b4b" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#ff4b4b" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="s0" gradientUnits="userSpaceOnUse" x1="41.5" y1="15.545" x2="51" y2="32"><stop offset="0" stop-color="#ff4b4b"/><stop offset="1" stop-color="#ff7a2e"/></linearGradient>
+    <linearGradient id="s1" gradientUnits="userSpaceOnUse" x1="51" y1="32" x2="41.5" y2="48.455"><stop offset="0" stop-color="#ff7a2e"/><stop offset="1" stop-color="#ffab3a"/></linearGradient>
+    <linearGradient id="s2" gradientUnits="userSpaceOnUse" x1="41.5" y1="48.455" x2="22.5" y2="48.455"><stop offset="0" stop-color="#ffab3a"/><stop offset="1" stop-color="#ffd23f"/></linearGradient>
+    <linearGradient id="s3" gradientUnits="userSpaceOnUse" x1="22.5" y1="48.455" x2="13" y2="32"><stop offset="0" stop-color="#ffd23f"/><stop offset="1" stop-color="#9be15d"/></linearGradient>
+    <linearGradient id="s4" gradientUnits="userSpaceOnUse" x1="13" y1="32" x2="22.5" y2="15.545"><stop offset="0" stop-color="#9be15d"/><stop offset="1" stop-color="#34d399"/></linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#tile)"/>
+  <path d="M 41.5 15.545 A 19 19 0 0 1 51 32" fill="none" stroke="url(#s0)" stroke-width="6" stroke-linecap="round"/>
+  <path d="M 51 32 A 19 19 0 0 1 41.5 48.455" fill="none" stroke="url(#s1)" stroke-width="6" stroke-linecap="round"/>
+  <path d="M 41.5 48.455 A 19 19 0 0 1 22.5 48.455" fill="none" stroke="url(#s2)" stroke-width="6" stroke-linecap="round"/>
+  <path d="M 22.5 48.455 A 19 19 0 0 1 13 32" fill="none" stroke="url(#s3)" stroke-width="6" stroke-linecap="round"/>
+  <path d="M 13 32 A 19 19 0 0 1 22.5 15.545" fill="none" stroke="url(#s4)" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="41.5" cy="15.545" r="8" fill="url(#glow)"/>
+  <circle cx="41.5" cy="15.545" r="3" fill="#fff3e0"/>
+  <text x="80" y="42" font-family="Geist, Inter, ui-sans-serif, system-ui, sans-serif" font-size="30" font-weight="600" letter-spacing="-0.9" fill="#fafafa">AI Cooldown</text>
+</svg>

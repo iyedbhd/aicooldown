@@ -1,0 +1,130 @@
+import { db, ensureSchema } from "./db";
+import { hashPassword, newId, randomToken, sha256, verifyPassword } from "./crypto";
+
+export type User = { id: string; email: string };
+
+const COOKIE = "aic_session";
+const SESSION_TTL_MS = 30 * 86400_000;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export class AuthError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export function validateCredentials(email: unknown, password: unknown): { email: string; password: string } {
+  if (typeof email !== "string" || !EMAIL_RE.test(email) || email.length > 254) throw new AuthError(400, "Enter a valid email address.");
+  if (typeof password !== "string" || password.length < 8) throw new AuthError(400, "Password must be at least 8 characters.");
+  if (password.length > 200) throw new AuthError(400, "Password is too long.");
+  return { email: email.trim().toLowerCase(), password };
+}
+
+export async function register(email: string, password: string): Promise<User> {
+  await ensureSchema();
+  const existing = await db().execute({ sql: "SELECT id FROM users WHERE email = ?", args: [email] });
+  if (existing.rows.length) throw new AuthError(409, "An account with that email already exists. Sign in instead.");
+  const id = newId();
+  await db().execute({
+    sql: "INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+    args: [id, email, hashPassword(password), Date.now()],
+  });
+  return { id, email };
+}
+
+export async function login(email: string, password: string): Promise<User> {
+  await ensureSchema();
+  const res = await db().execute({ sql: "SELECT id, email, password_hash FROM users WHERE email = ?", args: [email] });
+  const row = res.rows[0];
+  // Verify against a dummy hash when the user is unknown so timing does not reveal existence.
+  const hash = row ? String(row.password_hash) : DUMMY_HASH;
+  const ok = verifyPassword(password, hash);
+  if (!row || !ok) throw new AuthError(401, "Wrong email or password.");
+  return { id: String(row.id), email: String(row.email) };
+}
+
+const DUMMY_HASH = hashPassword("dummy-password-for-timing");
+
+export async function createSession(userId: string): Promise<string> {
+  const token = randomToken(32);
+  const now = Date.now();
+  await db().execute({
+    sql: "INSERT INTO sessions (id_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+    args: [sha256(token), userId, now + SESSION_TTL_MS, now],
+  });
+  return token;
+}
+
+function readCookie(req: Request): string | null {
+  const header = req.headers.get("cookie") ?? "";
+  for (const part of header.split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k === COOKIE) return decodeURIComponent(v.join("="));
+  }
+  return null;
+}
+
+export async function getSessionUser(req: Request): Promise<User | null> {
+  const token = readCookie(req);
+  if (!token) return null;
+  await ensureSchema();
+  const res = await db().execute({
+    sql: "SELECT u.id, u.email, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = ?",
+    args: [sha256(token)],
+  });
+  const row = res.rows[0];
+  if (!row) return null;
+  if (Number(row.expires_at) < Date.now()) {
+    await db().execute({ sql: "DELETE FROM sessions WHERE id_hash = ?", args: [sha256(token)] });
+    return null;
+  }
+  return { id: String(row.id), email: String(row.email) };
+}
+
+export async function destroySession(req: Request): Promise<void> {
+  const token = readCookie(req);
+  if (!token) return;
+  await ensureSchema();
+  await db().execute({ sql: "DELETE FROM sessions WHERE id_hash = ?", args: [sha256(token)] });
+}
+
+export function sessionCookie(token: string): string {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  return `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}${secure}`;
+}
+
+export function clearedCookie(): string {
+  return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+}
+
+/** Rejects cross-site form posts. SameSite=Lax cookies already block most; this closes the rest. */
+export function sameOrigin(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  if (!origin) return true; // same-origin fetches without Origin (older UAs) or non-browser clients
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
+/* Best-effort per-IP throttle for credential endpoints (per server instance). */
+const attempts = new Map<string, { count: number; resetAt: number }>();
+const LIMIT = 20;
+const WINDOW_MS = 15 * 60_000;
+
+export function throttle(req: Request): boolean {
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || req.headers.get("x-real-ip") || "local";
+  const now = Date.now();
+  const entry = attempts.get(ip);
+  if (!entry || entry.resetAt < now) {
+    attempts.set(ip, { count: 1, resetAt: now + WINDOW_MS });
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= LIMIT;
+}
