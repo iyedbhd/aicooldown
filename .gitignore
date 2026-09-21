@@ -30,5 +30,5 @@ yarn-error.log*
 /coverage
 
 # personal launch notes and editor/tool config, not part of the project
-LAUNCH.md
+/launch/
 .claude/

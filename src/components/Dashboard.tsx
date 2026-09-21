@@ -330,9 +330,9 @@ export function Dashboard() {
                 Sign in
               </button>
             )}
-            <a href={SITE.repo} target="_blank" rel="noopener noreferrer" title="Source code on GitHub" className={btn}>
+            <a href={SITE.repo} target="_blank" rel="noopener noreferrer" title="Open source · star the repo on GitHub" className={btn}>
               <GitHubGlyph />
-              GitHub
+              Star us on GitHub
             </a>
             <ThemeToggle className={btn} />
             <button type="button" onClick={() => void toggleNotify()} disabled={accounts.length === 0} aria-pressed={notify} title="Browser notification when a limit resets, crosses 90% or runs out" className={`${btn} ${notify ? "btn-accent" : ""}`}>
