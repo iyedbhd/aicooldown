@@ -7,7 +7,9 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: { default: `${SITE.name} · ${SITE.tagline}`, template: `%s · ${SITE.name}` },
+  title: { default: `${SITE.name} · Claude & Codex usage limits and reset times`, template: `%s · ${SITE.name}` },
+  keywords: ["Claude Code usage limit", "Claude weekly limit reset", "Codex usage limit", "Codex limit reset", "Claude usage tracker", "AI rate limit dashboard"],
+  alternates: { canonical: "/" },
   description: SITE.description,
   metadataBase: new URL(`https://${SITE.domain}`),
   openGraph: { title: SITE.name, description: SITE.description, siteName: SITE.name, type: "website", url: "/" },

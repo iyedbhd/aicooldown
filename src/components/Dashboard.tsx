@@ -468,6 +468,10 @@ export function Dashboard() {
         </span>
         <span>
           Not affiliated with Anthropic or OpenAI ·{" "}
+          <Link href="/guides" className="text-muted hover:text-fg">
+            guides
+          </Link>{" "}
+          ·{" "}
           <Link href="/brand" className="text-muted hover:text-fg">
             brand
           </Link>
