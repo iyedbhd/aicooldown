@@ -10,7 +10,8 @@ export const metadata: Metadata = {
   title: { default: `${SITE.name} · ${SITE.tagline}`, template: `%s · ${SITE.name}` },
   description: SITE.description,
   metadataBase: new URL(`https://${SITE.domain}`),
-  openGraph: { title: SITE.name, description: SITE.description, siteName: SITE.name, type: "website" },
+  openGraph: { title: SITE.name, description: SITE.description, siteName: SITE.name, type: "website", url: "/" },
+  twitter: { card: "summary_large_image", title: SITE.name, description: SITE.description },
 };
 
 /* Runs before paint so the page never flashes the wrong theme. */
