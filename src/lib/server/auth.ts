@@ -91,6 +91,54 @@ export async function destroySession(req: Request): Promise<void> {
   await db().execute({ sql: "DELETE FROM sessions WHERE id_hash = ?", args: [sha256(token)] });
 }
 
+function validatePassword(password: unknown): string {
+  if (typeof password !== "string" || password.length < 8) throw new AuthError(400, "Password must be at least 8 characters.");
+  if (password.length > 200) throw new AuthError(400, "Password is too long.");
+  return password;
+}
+
+async function checkPassword(userId: string, password: unknown): Promise<void> {
+  const res = await db().execute({ sql: "SELECT password_hash FROM users WHERE id = ?", args: [userId] });
+  const row = res.rows[0];
+  if (!row || typeof password !== "string" || !verifyPassword(password, String(row.password_hash))) throw new AuthError(401, "Wrong password.");
+}
+
+/** Sets a new password and signs out every other device; the session behind `req` stays. */
+export async function changePassword(req: Request, user: User, currentPassword: unknown, newPassword: unknown): Promise<void> {
+  const next = validatePassword(newPassword);
+  await checkPassword(user.id, currentPassword);
+  if (currentPassword === next) throw new AuthError(400, "That is already your password.");
+  const keep = readCookie(req);
+  await db().batch(
+    [
+      { sql: "UPDATE users SET password_hash = ? WHERE id = ?", args: [hashPassword(next), user.id] },
+      { sql: "DELETE FROM sessions WHERE user_id = ? AND id_hash != ?", args: [user.id, keep ? sha256(keep) : ""] },
+    ],
+    "write",
+  );
+}
+
+/** Signs out every device except the one behind `req`. Returns how many sessions went. */
+export async function signOutOthers(req: Request, user: User): Promise<number> {
+  const keep = readCookie(req);
+  const res = await db().execute({ sql: "DELETE FROM sessions WHERE user_id = ? AND id_hash != ?", args: [user.id, keep ? sha256(keep) : ""] });
+  return res.rowsAffected;
+}
+
+/** Deletes the user with every session and linked account. Needs the password again. */
+export async function deleteAccount(user: User, password: unknown): Promise<void> {
+  await checkPassword(user.id, password);
+  // Explicit, rather than relying on ON DELETE CASCADE being enforced by the server.
+  await db().batch(
+    [
+      { sql: "DELETE FROM linked_accounts WHERE user_id = ?", args: [user.id] },
+      { sql: "DELETE FROM sessions WHERE user_id = ?", args: [user.id] },
+      { sql: "DELETE FROM users WHERE id = ?", args: [user.id] },
+    ],
+    "write",
+  );
+}
+
 export function sessionCookie(token: string): string {
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
   return `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}${secure}`;

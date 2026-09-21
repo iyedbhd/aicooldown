@@ -16,6 +16,7 @@ import { localStore, remoteStore, type AccountStore, type NewAccount } from "@/l
 import type { Account, Identity, Usage } from "@/lib/types";
 import { loadUsage, type UsageState } from "@/lib/usage-client";
 import { AccountCard } from "./AccountCard";
+import { AccountDialog } from "./AccountDialog";
 import { AddAccountDialog } from "./AddAccountDialog";
 import { AuthDialog } from "./AuthDialog";
 import { CommandPanel } from "./CommandPanel";
@@ -42,6 +43,7 @@ export function Dashboard() {
   const [now, setNow] = useState(() => Date.now());
   const [showAdd, setShowAdd] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   const [notify, setNotify] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -217,6 +219,13 @@ export function Dashboard() {
     await switchStore(localStore);
   }
 
+  async function handleAccountDeleted() {
+    setShowAccount(false);
+    setUser(null);
+    await switchStore(localStore);
+    setNote("Your account and everything stored on the server are gone.");
+  }
+
   async function addAccount(partial: NewAccount) {
     const account = await storeRef.current.add(partial);
     setAccountList([...accountsRef.current, account]);
@@ -317,9 +326,9 @@ export function Dashboard() {
           <div className="flex flex-wrap items-center gap-2">
             {user ? (
               <span className="mr-1 flex items-center gap-2 font-mono text-[11px] text-muted">
-                <span className="max-w-[16rem] truncate" title={user.email}>
+                <button type="button" onClick={() => setShowAccount(true)} className="max-w-[16rem] truncate hover:text-fg" title="Account settings: password, devices, delete">
                   {user.email}
-                </span>
+                </button>
                 <button type="button" onClick={() => void handleSignOut()} className="flex items-center gap-1 text-faint hover:text-fg" title="Sign out">
                   <Icon name="logout" size={12} />
                   sign out
@@ -467,6 +476,18 @@ export function Dashboard() {
 
       {showAdd && <AddAccountDialog onAdd={addAccount} onClose={() => setShowAdd(false)} />}
       {showAuth && <AuthDialog onSignedIn={(u) => void handleSignedIn(u)} onClose={() => setShowAuth(false)} localCount={accounts.length} />}
+      {showAccount && user && (
+        <AccountDialog
+          user={user}
+          linkedCount={accounts.length}
+          onClose={() => setShowAccount(false)}
+          onNote={(text) => {
+            setNote(text);
+            setShowAccount(false);
+          }}
+          onDeleted={() => void handleAccountDeleted()}
+        />
+      )}
     </main>
   );
 }

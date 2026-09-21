@@ -68,7 +68,7 @@ The hosted version at **[aicooldown.com](https://aicooldown.com)** needs no setu
 | Claude Code | `~/.claude/.credentials.json` | On macOS the live token is in Keychain (item `Claude Code-credentials`); the file can be stale. |
 | Codex CLI | `~/.codex/auth.json` | Written by `codex login`. |
 
-You can use the whole thing as a guest, with everything kept in your browser. Or create an AI Cooldown account with an email and password to have your linked accounts follow you across devices.
+You can use the whole thing as a guest, with everything kept in your browser. Or create an AI Cooldown account with an email and password to have your linked accounts follow you across devices. Click your email in the header to change your password (which signs out every other device), sign out other devices, or delete the account along with everything stored for it.
 
 ## How it treats your tokens
 
