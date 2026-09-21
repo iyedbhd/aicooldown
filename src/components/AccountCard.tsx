@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { formatAgo, formatCountdown, formatPlan } from "@/lib/format";
+import { formatAgo, formatCountdown, formatMoney, formatPlan } from "@/lib/format";
+import { monthlyPrice } from "@/lib/spend";
 import type { Sample } from "@/lib/history";
 import type { Account } from "@/lib/types";
 import type { UsageState } from "@/lib/usage-client";
@@ -35,6 +36,7 @@ export function AccountCard({ account, state, history, now, synced, onRefresh, o
   const loading = !state || state.status === "loading";
   const token = tokenStatus(account, now, synced);
   const plan = formatPlan(account.plan ?? usage?.plan);
+  const price = monthlyPrice(account.provider, account.plan ?? usage?.plan);
   const rateLimited = state?.rateLimitedUntil !== undefined && state.rateLimitedUntil > now;
   const [draft, setDraft] = useState<string | null>(null);
 
@@ -55,6 +57,11 @@ export function AccountCard({ account, state, history, now, synced, onRefresh, o
               <>
                 <span className="text-faint">·</span>
                 <span className="rounded-md bg-panel-3 px-1.5 py-px font-medium text-fg-2">{plan}</span>
+                {price !== null && (
+                  <span className="font-mono text-[11px] text-faint" title="List price of this plan">
+                    {price === 0 ? "free" : `${formatMoney(price)}/mo`}
+                  </span>
+                )}
               </>
             )}
           </div>
