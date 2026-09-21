@@ -1,6 +1,7 @@
-type Name = "refresh" | "bell" | "bellOff" | "copy" | "check" | "sun" | "moon" | "plus" | "chevron" | "user" | "logout" | "trash" | "clock" | "gauge" | "calendar" | "flame" | "trend";
+type Name = "refresh" | "bell" | "bellOff" | "copy" | "check" | "sun" | "moon" | "plus" | "chevron" | "user" | "logout" | "trash" | "clock" | "gauge" | "calendar" | "flame" | "trend" | "star";
 
 const PATHS: Record<Name, string> = {
+  star: "M12 2.8l2.8 5.9 6.4.8-4.7 4.5 1.2 6.4L12 17.3l-5.7 3.1 1.2-6.4-4.7-4.5 6.4-.8z",
   trash: "M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6",
   refresh: "M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6",
   bell: "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0",
@@ -20,16 +21,16 @@ const PATHS: Record<Name, string> = {
   trend: "M3 17l6-6 4 4 8-8M15 7h6v6",
 };
 
-type Props = { name: Name; size?: number; className?: string; strokeWidth?: number };
+type Props = { name: Name; size?: number; className?: string; strokeWidth?: number; fill?: boolean };
 
-/** Inline stroke icons (currentColor), small enough to sit inside buttons and chips. */
-export function Icon({ name, size = 14, className, strokeWidth = 2 }: Props) {
+/** Inline stroke icons (currentColor), small enough to sit inside buttons and chips. `fill` also fills the shape. */
+export function Icon({ name, size = 14, className, strokeWidth = 2, fill = false }: Props) {
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill="none"
+      fill={fill ? "currentColor" : "none"}
       stroke="currentColor"
       strokeWidth={strokeWidth}
       strokeLinecap="round"

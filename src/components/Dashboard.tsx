@@ -331,7 +331,7 @@ export function Dashboard() {
               </button>
             )}
             <a href={SITE.repo} target="_blank" rel="noopener noreferrer" title="Open source · star the repo on GitHub" className={btn}>
-              <GitHubGlyph />
+              <Icon name="star" fill className="text-amber-400" />
               Star us on GitHub
             </a>
             <ThemeToggle className={btn} />
