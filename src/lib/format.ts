@@ -26,6 +26,12 @@ export function formatAgo(ms: number): string {
   return text === "now" ? "just now" : `${text} ago`;
 }
 
+/** "$340", "$11.20": whole dollars unless the cents matter. */
+export function formatMoney(usd: number): string {
+  const rounded = Math.round(usd * 100) / 100;
+  return Number.isInteger(rounded) || rounded >= 100 ? `$${Math.round(rounded)}` : `$${rounded.toFixed(2)}`;
+}
+
 /** "self_serve_business_prolite" → "Business Pro Lite", "plus" → "Plus". */
 export function formatPlan(plan: string | null | undefined): string | null {
   if (!plan) return null;

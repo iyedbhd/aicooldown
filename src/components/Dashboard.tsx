@@ -21,6 +21,7 @@ import { AuthDialog } from "./AuthDialog";
 import { CommandPanel } from "./CommandPanel";
 import { Icon } from "./Icon";
 import { Mark, Wordmark } from "./Logo";
+import { Overview } from "./Overview";
 import { GitHubGlyph, ProviderTile } from "./ProviderLogo";
 import { ResetTimeline } from "./ResetTimeline";
 import { ThemeToggle } from "./ThemeToggle";
@@ -417,8 +418,9 @@ export function Dashboard() {
         <>
           {accounts.length > 0 && (
             <div className="mt-6 space-y-6">
-              <div>
+              <div className="space-y-4">
                 <h2 className="mb-2 text-sm font-medium text-muted">Right now</h2>
+                <Overview accounts={accounts} usages={usages} resets={resets} now={now} />
                 <CommandPanel ranked={ranked} now={now} />
               </div>
               <div>

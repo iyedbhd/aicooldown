@@ -59,6 +59,8 @@ export type Ranked = {
   weeklyLeft: number | null;
   /** Earliest reset among windows that are at 100%, null when nothing is exhausted. */
   blockedUntil: number | null;
+  /** Length of the window behind `blockedUntil`, for showing how far through the wait we are. */
+  blockedWindowMs: number | null;
 };
 
 /** Orders accounts by how much immediate headroom they have; exhausted ones last. */
@@ -68,12 +70,16 @@ export function rankAccounts(accounts: Account[], usages: Record<string, Usage |
     const windows = usages[account.id]?.windows ?? [];
     const session = windows.find(isSessionWindow);
     const weekly = windows.filter((w) => !isSessionWindow(w));
-    const exhausted = windows.filter((w) => w.usedPercent >= 100 && w.resetsAt);
+    const exhausted = windows
+      .filter((w) => w.usedPercent >= 100 && w.resetsAt)
+      .sort((a, b) => new Date(a.resetsAt!).getTime() - new Date(b.resetsAt!).getTime());
+    const blocking = exhausted[0];
     out[account.provider].push({
       account,
       sessionLeft: session ? 100 - session.usedPercent : null,
       weeklyLeft: weekly.length ? Math.min(...weekly.map((w) => 100 - w.usedPercent)) : null,
-      blockedUntil: exhausted.length ? Math.min(...exhausted.map((w) => new Date(w.resetsAt!).getTime())) : null,
+      blockedUntil: blocking ? new Date(blocking.resetsAt!).getTime() : null,
+      blockedWindowMs: blocking?.windowSeconds ? blocking.windowSeconds * 1000 : null,
     });
   }
   const score = (r: Ranked) => (r.blockedUntil ? -1 : Math.min(r.sessionLeft ?? 100, r.weeklyLeft ?? 100));
@@ -86,7 +92,7 @@ export function rankAccounts(accounts: Account[], usages: Record<string, Usage |
 export type Verdict =
   | { kind: "unknown" }
   | { kind: "go"; account: Account; sessionLeft: number | null; weeklyLeft: number | null }
-  | { kind: "wait"; account: Account; waitMs: number };
+  | { kind: "wait"; account: Account; waitMs: number; windowMs: number | null };
 
 /** The one-line answer per provider: go with this account, or wait this long. */
 export function providerVerdict(list: Ranked[], now: number): Verdict {
@@ -95,7 +101,7 @@ export function providerVerdict(list: Ranked[], now: number): Verdict {
   const best = withData.find((r) => !r.blockedUntil);
   if (best) return { kind: "go", account: best.account, sessionLeft: best.sessionLeft, weeklyLeft: best.weeklyLeft };
   const soonest = withData.reduce((a, b) => (b.blockedUntil! < a.blockedUntil! ? b : a));
-  return { kind: "wait", account: soonest.account, waitMs: soonest.blockedUntil! - now };
+  return { kind: "wait", account: soonest.account, waitMs: soonest.blockedUntil! - now, windowMs: soonest.blockedWindowMs };
 }
 
 export type DailyBudget = {

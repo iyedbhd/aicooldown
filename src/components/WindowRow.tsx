@@ -112,7 +112,7 @@ export function WindowRow({ window: w, samples, now, accent }: Props) {
           )}
         </div>
       </button>
-      {open && <HistoryChart samples={samples} color={fill} now={now} />}
+      {open && <HistoryChart samples={samples} window={w} burn={burn} color={fill} now={now} />}
     </div>
   );
 }

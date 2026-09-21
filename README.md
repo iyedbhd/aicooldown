@@ -34,7 +34,9 @@ Both providers expose this information, but they hide it in different places and
 
 ## What you get
 
-**One verdict per provider.** At the top of the page, a plain **Go** or **Wait** for Claude and for Codex, naming the account with the most headroom. Below it, your accounts ranked by how much they have left right now.
+**Three numbers first.** What your subscriptions add up to per month (list prices of the plans your accounts report), how much of this week's money you have actually used, and the soonest reset across everything.
+
+**One verdict per provider.** A plain **Go** or **Wait** for Claude and for Codex, with a ring that fills with your headroom, or with how far through the wait you are. Below it, your accounts ranked by how much they have left right now.
 
 **Every window the provider reports.** The 5-hour session, the weekly limit, and the per-model weekly limits (Fable, Opus, Sonnet), with the one that is currently limiting you flagged. Your subscription tier is shown on each account.
 
@@ -46,7 +48,7 @@ Both providers expose this information, but they hide it in different places and
 
 **Pace, burn rate and daily budget.** A tick on each meter shows how far through the window you are. If the fill is left of the tick, you are under pace. Your recent burn rate projects whether you run dry before the reset, and weekly windows show how much you can spend per day and still make it.
 
-**History.** Click any window for a 48-hour chart of your usage with reset markers, built from your own polling history and kept in your browser.
+**History, and what comes next.** Click any window for a 48-hour chart of your usage with reset markers, then a look ahead: a dashed projection at your current burn rate up to the reset, or to the moment you run dry if that comes first. Built from your own polling history and kept in your browser.
 
 **The small things.** Browser notifications when a limit resets or runs out. A countdown in the tab title so a pinned tab is enough. One-click "copy status" for pasting into chat. Rename accounts to whatever makes sense to you. Light and dark themes.
 
