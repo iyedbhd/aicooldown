@@ -1,94 +1,123 @@
-<p align="center"><img src="public/logo.svg" alt="AI Cooldown" width="360"></p>
+<p align="center">
+  <a href="https://aicooldown.com"><img src="public/logo.svg" alt="AI Cooldown" width="340"></a>
+</p>
 
-# AI Cooldown
+<p align="center">
+  <strong>Know when your AI limits come back.</strong><br>
+  Every Claude and ChatGPT/Codex limit, across all your accounts, on one screen.
+</p>
 
-**[aicooldown.com](https://aicooldown.com)** · Know when your AI limits come back.
+<p align="center">
+  <a href="https://aicooldown.com">Use it now</a> ·
+  <a href="#run-it-yourself">Self-host</a> ·
+  <a href="#how-it-treats-your-tokens">Security</a> ·
+  <a href="https://github.com/iyedbhd/aicooldown/issues">Issues</a>
+</p>
 
-One dashboard for the usage limits of all your **Claude** (Pro/Max) and **ChatGPT / Codex** accounts: how much of each session and weekly window you have used, exactly when each cooldown ends, and which account to switch to.
+<p align="center">
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
+  <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-000?logo=nextdotjs">
+  <a href="https://github.com/iyedbhd/aicooldown/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/iyedbhd/aicooldown?style=flat&color=f59e0b"></a>
+</p>
 
-- Connect as many accounts as you like, from either provider, and rename them however you want.
-- Every rate-limit window the provider reports: 5-hour session, weekly, and per-model weekly limits (Fable, Opus, Sonnet), with the one that is currently limiting you flagged. Subscription shown per account (Max 5x, Pro, Plus, ...).
-- **Go / Wait**: one verdict per provider. "Go · use iyed@personal · 82% session" or "Wait 2h 16m · every account is exhausted". Below it, accounts ranked by immediate headroom.
-- **Daily budget** on every weekly window: how much you can spend per day and still reach the reset, next to what you have spent today.
-- **Pace and projection** per window: a tick on each meter marks how far through the window you are (fill left of the tick means you are under pace), and your recent burn rate from local history projects whether you run dry before or after the reset.
-- **History**: click any window for a 48-hour chart with hover readouts and reset markers, built from your own polling history and kept in the browser.
-- **Notifications**: optional browser notifications when a limit resets, crosses 90%, or runs out (while the tab is open).
-- **Tab title** shows the countdown to the reset you are waiting on, so a pinned tab is enough.
-- **Copy status**: one click puts a plain-text summary of every account on the clipboard for pasting into chat.
-- **Capacity returns**: every upcoming reset on one log-scale timeline (1 minute to 7 days), plus the next few as a list.
-- Per-model availability and credit notices where Codex reports them.
-- Rate-limit aware: Claude is polled every 3 minutes, Codex every minute, the server caches answers per token, a 429 serves the last good copy and backs off exponentially.
-- **Optional account**: sign up with an email to keep linked accounts on the server (tokens encrypted at rest, never sent to the browser) and see them from any device. Or stay a guest and keep everything in this browser.
-- **Light and dark** themes, following the OS by default.
+<p align="center">
+  <img src="docs/screenshots/dashboard-dark.png" alt="AI Cooldown dashboard with two Claude and two Codex accounts" width="920">
+</p>
 
-## How it works
+---
 
-The app is a Next.js site. You connect a provider account either by signing in (OAuth with PKCE, the same public client the official CLIs use) or by pasting the token the CLI already saved on your machine. Where that token lives depends on whether you have an AI Cooldown account:
+## Why this exists
+
+If you pay for Claude and ChatGPT, maybe on more than one account, you know the feeling: you are in the middle of something, and the model tells you that you have hit a limit. Come back in a few hours. Which account still has room? When does the weekly reset land? Is the Fable limit the one blocking you, or the general one?
+
+Both providers expose this information, but they hide it in different places and none of them show it side by side. AI Cooldown pulls every rate-limit window from every account you connect and answers the only question that matters: **can I keep working right now, and on which account?**
+
+## What you get
+
+**One verdict per provider.** At the top of the page, a plain **Go** or **Wait** for Claude and for Codex, naming the account with the most headroom. Below it, your accounts ranked by how much they have left right now.
+
+**Every window the provider reports.** The 5-hour session, the weekly limit, and the per-model weekly limits (Fable, Opus, Sonnet), with the one that is currently limiting you flagged. Your subscription tier is shown on each account.
+
+**A timeline of when capacity comes back.** Every upcoming reset on one log-scale line from one minute to seven days, so you can see at a glance whether relief is minutes or days away.
+
+<p align="center">
+  <img src="docs/screenshots/history.png" alt="Account cards with a 48-hour history chart expanded" width="920">
+</p>
+
+**Pace, burn rate and daily budget.** A tick on each meter shows how far through the window you are. If the fill is left of the tick, you are under pace. Your recent burn rate projects whether you run dry before the reset, and weekly windows show how much you can spend per day and still make it.
+
+**History.** Click any window for a 48-hour chart of your usage with reset markers, built from your own polling history and kept in your browser.
+
+**The small things.** Browser notifications when a limit resets or runs out. A countdown in the tab title so a pinned tab is enough. One-click "copy status" for pasting into chat. Rename accounts to whatever makes sense to you. Light and dark themes.
+
+<p align="center">
+  <img src="docs/screenshots/dashboard-light.png" alt="The same dashboard in light mode" width="920">
+</p>
+
+## Getting started
+
+The hosted version at **[aicooldown.com](https://aicooldown.com)** needs no setup. Click **Add account**, then either:
+
+- **Sign in** with your Claude or ChatGPT account. This uses the same OAuth flow the official CLIs use, so the app can refresh its own tokens and keep polling for weeks.
+- **Import a token** the CLI already saved on your machine. Paste the whole credentials file or just the access token. Imported tokens are never refreshed here (both providers rotate refresh tokens, and doing it from two places would log your CLI out), so you paste again when they expire.
+
+| Provider | Where the CLI keeps its token | Notes |
+| --- | --- | --- |
+| Claude Code | `~/.claude/.credentials.json` | On macOS the live token is in Keychain (item `Claude Code-credentials`); the file can be stale. |
+| Codex CLI | `~/.codex/auth.json` | Written by `codex login`. |
+
+You can use the whole thing as a guest, with everything kept in your browser. Or create an AI Cooldown account with an email and password to have your linked accounts follow you across devices.
+
+## How it treats your tokens
+
+This app needs your provider tokens to read your limits, so here is exactly what happens with them.
 
 | | Guest (no sign-in) | Signed in |
 | --- | --- | --- |
-| Where linked accounts live | this browser's `localStorage` | the database, encrypted with `APP_SECRET` |
-| Where provider tokens go | sent with each usage request to the site's proxy | never leave the server; the browser asks by account id |
+| Where linked accounts live | this browser's `localStorage` | the database, encrypted with `APP_SECRET` (AES-256-GCM) |
+| Where tokens go | sent with each usage request to the site's proxy, never stored | never leave the server; the browser asks by account id |
 | Other devices | no | yes |
 | Polling history and theme | this browser | this browser |
 
-Guest mode needs no database. Signing up takes an email and a password (scrypt-hashed, session cookie, no third-party auth service). When you first sign in, accounts already in the browser can be moved over with one click.
+The server only ever calls the providers' own usage endpoints. It reads limits and your account email, nothing else: no conversations, no messages. Passwords are scrypt-hashed, sessions are an httpOnly cookie, and there is no third-party auth service.
 
-On a schedule (Claude every 3 minutes, Codex every minute) the browser asks `/api/usage` for each account; the server calls the provider's usage endpoint, refreshes tokens it owns when they are about to expire, keeps a short in-memory cache per token so repeated requests do not hit the provider, and if the provider answers 429 returns the last good copy marked stale.
+If you would rather not have your tokens pass through someone else's server at all, that is a reasonable position. Host your own copy. It is one click on Vercel and the code is all here to read.
 
-Anthropic rate-limits its usage endpoint per access token, sends no Retry-After, and a tripped limit can last hours. If you see "rate-limiting this token" on a card, the dashboard keeps showing the last data it got and retries with growing delays (5, 10, 20, 30 minutes). Avoid running several usage tools against the same token at once.
-
-If you use the hosted instance, your tokens pass through that server in transit. If you do not want that, host your own copy (it is a one-click deploy) or run it locally.
-
-### Sign in vs. import
-
-| Method | What is stored | Refreshes itself? |
-| --- | --- | --- |
-| **Sign in** | Access + refresh token issued to this app | Yes. The app owns the session, so it refreshes before expiry. |
-| **Import CLI token** | Access token only | No. Both providers rotate refresh tokens on use, so refreshing an imported token here would log your CLI out. When it expires (Claude: ~8 hours, Codex: days), import it again. |
-
-Where the CLIs keep their tokens:
-
-| Provider | File | Notes |
-| --- | --- | --- |
-| Claude Code | `~/.claude/.credentials.json` | On macOS the live token is in Keychain (item `Claude Code-credentials`) and the file can be stale. |
-| Codex CLI | `~/.codex/auth.json` | Written by `codex login`. |
-
-Paste the whole file, or just the access token.
-
-## Run locally
+## Run it yourself
 
 ```bash
+git clone https://github.com/iyedbhd/aicooldown.git
+cd aicooldown
 npm install
 npm run dev
 ```
 
-Open http://localhost:3000. Guest mode works with no configuration. Sign-up works too: the database is a SQLite file created at `data/aicooldown.db`, and a development encryption key is used with a console warning.
+Open http://localhost:3000. Guest mode works with zero configuration. Sign-up works too: it creates a SQLite file at `data/aicooldown.db` and uses a development encryption key with a console warning.
 
-## Deploy
+### Deploy
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/iyedbhd/aicooldown&env=APP_SECRET,LIBSQL_URL,LIBSQL_AUTH_TOKEN)
-
-Environment variables for a hosted instance:
 
 | Variable | Required | What |
 | --- | --- | --- |
 | `APP_SECRET` | yes, in production | 32+ random characters. Encrypts stored provider tokens. Changing it makes existing stored tokens unreadable. |
-| `LIBSQL_URL` | yes, on serverless hosts | libSQL database URL, e.g. a free [Turso](https://turso.tech) database (`libsql://...`). Defaults to `file:data/aicooldown.db`, which does not persist on Vercel. Vercel's Turso Marketplace integration sets `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` instead, which are accepted too. |
+| `LIBSQL_URL` | on serverless hosts | libSQL database URL, e.g. a free [Turso](https://turso.tech) database (`libsql://...`). Defaults to `file:data/aicooldown.db`, which does not persist on Vercel. Vercel's Turso integration sets `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` instead, and those work too. |
 | `LIBSQL_AUTH_TOKEN` | with Turso | The database auth token. |
 
-Any host that runs Next.js works (Vercel, Netlify, a Node server, Docker). The API routes need outbound HTTPS access to `api.anthropic.com`, `platform.claude.com`, `chatgpt.com` and `auth.openai.com`.
+Any host that runs Next.js works: Vercel, Netlify, a Node server, Docker. The API routes need outbound HTTPS to `api.anthropic.com`, `platform.claude.com`, `chatgpt.com` and `auth.openai.com`. Copy `.env.example` to `.env.local` to get started.
 
-## Endpoints used
+## Under the hood
 
-These are the same endpoints the official CLIs call. They are not publicly documented and may change without notice.
+On a schedule (Claude every 3 minutes, Codex every minute) the browser asks `/api/usage` for each account. The server calls the provider's usage endpoint, refreshes tokens it owns when they are about to expire, keeps a short in-memory cache per token so repeated requests do not hit the provider, and if the provider answers 429 it returns the last good copy marked stale while the client backs off (5, 10, 20, then 30 minutes).
+
+Anthropic rate-limits its usage endpoint per token, sends no Retry-After header, and a tripped limit can last hours. If a card says "rate-limiting this token", the dashboard keeps showing the last data it got. Running several usage tools against the same token at once is the usual cause.
+
+These are the endpoints the official CLIs use. They are not publicly documented and may change without notice.
 
 | Provider | Usage | Auth |
 | --- | --- | --- |
-| Claude | `GET https://api.anthropic.com/api/oauth/usage` (+ `/api/oauth/profile` for the account email) | `https://claude.ai/oauth/authorize` → `https://platform.claude.com/v1/oauth/token` |
+| Claude | `GET https://api.anthropic.com/api/oauth/usage` (+ `/api/oauth/profile` for the email) | `https://claude.ai/oauth/authorize` → `https://platform.claude.com/v1/oauth/token` |
 | Codex | `GET https://chatgpt.com/backend-api/wham/usage` | `https://auth.openai.com/oauth/authorize` → `https://auth.openai.com/oauth/token` |
-
-## Project layout
 
 ```
 src/app/api/usage            usage for a stored account (by id) or a guest account (tokens in body)
@@ -103,14 +132,28 @@ src/lib/store.ts             browser-side account store: localStorage or the API
 src/components/*             dashboard UI
 ```
 
-## Brand
+Built with Next.js 16, React 19, Tailwind 4 and libSQL. The name, tagline and domain live in `src/lib/site.ts`; logo files are in `public/` and the `/brand` page shows them with the color tokens.
 
-The name, tagline and domain live in `src/lib/site.ts`. Logo files are in `public/` (`mark.svg`, `logo.svg`) and `src/app/icon.svg` (favicon); the `/brand` page shows them with the color tokens.
+## Contributing
 
-## Disclaimer
+Bug reports, ideas and pull requests are all welcome. The most useful things right now:
 
-This project is not affiliated with Anthropic or OpenAI. The Claude and OpenAI marks shown next to accounts are their owners' trademarks, used only to identify each provider (glyphs via [Simple Icons](https://simpleicons.org)). It reads your own account's usage data with your own credentials. Use at your own risk and keep your tokens private: anyone who has them can act as you.
+- A provider response that the app parses wrongly or does not show (a redacted JSON sample in an issue is perfect).
+- Any rate-limit behaviour you see that the backoff does not handle well.
+- Support for another provider that exposes its limits.
 
-## License
+Keep changes focused and run `npm run lint` and `npm run build` before opening a PR.
 
-MIT
+## If this saved you a "come back in 3 hours"
+
+A star on the repo genuinely helps other people find it, and it is the easiest way to say the tool was useful. Thank you.
+
+<p align="center">
+  <a href="https://github.com/iyedbhd/aicooldown/stargazers">⭐ Star AI Cooldown on GitHub</a>
+</p>
+
+## Disclaimer and license
+
+Not affiliated with Anthropic or OpenAI. The Claude and OpenAI marks shown next to accounts are their owners' trademarks, used only to identify each provider (glyphs via [Simple Icons](https://simpleicons.org)). The app reads your own account's usage data with your own credentials. Keep your tokens private: anyone who has them can act as you.
+
+MIT. See [LICENSE](LICENSE).
