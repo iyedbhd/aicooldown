@@ -15,6 +15,8 @@ const PRICES: Record<Provider, [RegExp, number][]> = {
     [/free/i, 0],
   ],
   codex: [
+    [/business.*pro.?lite|pro.?lite.*business/i, 125],
+    [/pro.?lite/i, 100],
     [/team|business|enterprise/i, 30],
     [/pro/i, 200],
     [/plus/i, 20],
