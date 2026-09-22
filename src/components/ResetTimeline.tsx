@@ -78,9 +78,10 @@ export function ResetTimeline({ accounts, events, now }: Props) {
   const pct = (at: number) => Math.round(((at - now) / range.ms) * 100_000) / 1000;
   const ticks = ticksFor(now, range.ms, range.tickHours);
   const nowLabel = new Date(now).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const nextId = events[0]?.account.id;
   const rows = accounts.map((account) => {
     const mine = events.filter((e) => e.account.id === account.id);
-    return { account, pills: pillsFor(mine.filter((e) => e.at < now + range.ms)), later: mine.filter((e) => e.at >= now + range.ms) };
+    return { account, next: account.id === nextId, pills: pillsFor(mine.filter((e) => e.at < now + range.ms)), later: mine.filter((e) => e.at >= now + range.ms) };
   });
 
   return (
@@ -107,10 +108,15 @@ export function ResetTimeline({ accounts, events, now }: Props) {
           {/* Left column: header, then one label per account. */}
           <div>
             <div className={`${ROW} flex items-end pb-1 pr-3 text-[10px] uppercase tracking-wide text-faint`}>account</div>
-            {rows.map(({ account }) => (
-              <div key={account.id} className={`${ROW} flex items-center gap-2 border-t border-line pr-3`}>
+            {rows.map(({ account, next }) => (
+              <div key={account.id} className={`${ROW} flex items-center gap-2 border-t border-line pr-3 ${next ? "bg-panel-3" : ""}`}>
                 <ProviderGlyph provider={account.provider} size={12} className="shrink-0 opacity-90" />
                 <span className="truncate text-xs text-fg-2">{account.label}</span>
+                {next && (
+                  <span className="shrink-0 rounded bg-emerald-600 px-1 py-px font-mono text-[9px] font-medium text-white" title="Next limit to reset">
+                    next
+                  </span>
+                )}
               </div>
             ))}
           </div>
@@ -137,8 +143,8 @@ export function ResetTimeline({ accounts, events, now }: Props) {
             </div>
 
             <div className={ROW} />
-            {rows.map(({ account, pills, later }) => (
-              <div key={account.id} className={`${ROW} relative border-t border-line`}>
+            {rows.map(({ account, next, pills, later }) => (
+              <div key={account.id} className={`${ROW} relative border-t border-line ${next ? "bg-panel-3" : ""}`}>
                 {pills.map((p) => {
                   const left = pct(p.at);
                   return (
@@ -148,7 +154,7 @@ export function ResetTimeline({ accounts, events, now }: Props) {
                       className={`absolute top-1/2 -translate-y-1/2 whitespace-nowrap rounded px-1.5 py-0.5 font-mono text-[10px] font-medium ${pillClass(p)} ${left > 88 ? "-translate-x-full" : ""}`}
                       style={{ left: `${left}%`, transition: "left 1s linear" }}
                     >
-                      {p.events.map((e) => shortLabel(e.window)).join("+")}
+                      {p.events.map((e) => `${shortLabel(e.window)} ${Math.round(e.window.usedPercent)}%`).join(" + ")}
                     </span>
                   );
                 })}
@@ -168,16 +174,19 @@ export function ResetTimeline({ accounts, events, now }: Props) {
 
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-faint">
         <span className="flex items-center gap-1.5">
-          <span className="rounded bg-amber-600 px-1.5 py-0.5 text-white">5h</span>5 hour limit resets
+          <span className="rounded bg-amber-600 px-1.5 py-0.5 text-white">5h 91%</span>5 hour limit resets, with how much of it is used now
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="rounded bg-violet-600 px-1.5 py-0.5 text-white">week+Fable</span>weekly and per-model limits reset (they share one instant)
+          <span className="rounded bg-violet-600 px-1.5 py-0.5 text-white">week 63% + Fable 78%</span>weekly and per-model limits reset (they share one instant)
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="rounded bg-rose-600 px-1.5 py-0.5 text-white">week+Fable</span>a limit at 100 comes back
+          <span className="rounded bg-rose-600 px-1.5 py-0.5 text-white">5h 100%</span>a limit at 100 comes back
         </span>
         <span className="flex items-center gap-1.5">
           <span className="inline-block h-3 border-l-2 border-emerald-500" />now
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="rounded bg-emerald-600 px-1 py-px text-[9px] text-white">next</span>the account whose limit resets first
         </span>
         {events.length === 0 && <span>No reset times reported yet.</span>}
       </div>
