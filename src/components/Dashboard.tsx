@@ -434,7 +434,7 @@ export function Dashboard() {
               </div>
               <div>
                 <h2 className="mb-2 text-sm font-medium text-muted">Capacity comes back</h2>
-                <ResetTimeline events={resets} now={now} />
+                <ResetTimeline accounts={accounts} events={resets} now={now} />
               </div>
               <h2 className="text-sm font-medium text-muted">Accounts</h2>
             </div>
