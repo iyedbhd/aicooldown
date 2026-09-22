@@ -1,11 +1,12 @@
-import { ProviderError, type Identity, type TokenSet, type Usage, type UsageWindow } from "../types";
+import { ProviderError, type BankedResets, type Identity, type TokenSet, type Usage, type UsageWindow } from "../types";
 
 // Same public OAuth client Claude Code uses (PKCE, no secret).
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const REDIRECT_URI = "https://platform.claude.com/oauth/code/callback";
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
-const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+// cedar_ember=1 adds the banked-reset grants to the same response.
+const USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
 const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
 const SCOPES = "user:profile user:inference user:sessions:claude_code user:mcp_servers";
 
@@ -138,6 +139,28 @@ function windowsFromFlatKeys(json: Record<string, unknown>): UsageWindow[] {
   return windows;
 }
 
+type Grant = { resets_left?: unknown; ends_at?: unknown; paused?: unknown };
+
+/**
+ * Banked resets (the CLI's `cedar_ember` program): grants of one or more
+ * resets each. Paused or lapsed grants cannot be claimed and do not count.
+ */
+function bankedResets(block: unknown, now: number): BankedResets | undefined {
+  if (!block || typeof block !== "object") return undefined;
+  const b = block as { eligible?: unknown; grants?: unknown };
+  if (b.eligible !== true || !Array.isArray(b.grants)) return undefined;
+  let available = 0;
+  let nextExpiresAt: string | null = null;
+  for (const raw of b.grants as Grant[]) {
+    if (!raw || typeof raw.resets_left !== "number" || raw.resets_left <= 0 || raw.paused === true) continue;
+    const ends = typeof raw.ends_at === "string" ? Date.parse(raw.ends_at) : NaN;
+    if (!Number.isNaN(ends) && ends <= now) continue;
+    available += raw.resets_left;
+    if (!Number.isNaN(ends) && (nextExpiresAt === null || ends < Date.parse(nextExpiresAt))) nextExpiresAt = new Date(ends).toISOString();
+  }
+  return available > 0 ? { available, nextExpiresAt } : undefined;
+}
+
 function normalizeUsage(json: Record<string, unknown>): Usage {
   const limits = Array.isArray(json.limits) ? (json.limits as LimitEntry[]) : [];
   const windows = limits.length > 0 ? windowsFromLimits(limits, json) : windowsFromFlatKeys(json);
@@ -146,7 +169,7 @@ function normalizeUsage(json: Record<string, unknown>): Usage {
     const ib = WINDOW_ORDER.indexOf(b.key);
     return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
   });
-  return { provider: "claude", windows, fetchedAt: new Date().toISOString() };
+  return { provider: "claude", windows, bankedResets: bankedResets(json.cedar_ember, Date.now()), fetchedAt: new Date().toISOString() };
 }
 
 async function readError(res: Response): Promise<string> {

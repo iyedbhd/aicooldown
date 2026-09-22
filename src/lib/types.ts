@@ -43,10 +43,23 @@ export type ModelAvailability = {
   availableAt: string | null;
 };
 
+/**
+ * Saved one-time limit resets the provider granted to the account
+ * (Codex "banked resets", Claude's `cedar_ember` grants). Redeemed in the
+ * provider's own app; they expire.
+ */
+export type BankedResets = {
+  available: number;
+  /** ISO timestamp when the soonest-expiring reset lapses, if reported. */
+  nextExpiresAt: string | null;
+};
+
 export type Usage = {
   provider: Provider;
   plan?: string;
   windows: UsageWindow[];
+  /** Absent when the provider reports none or the account is not eligible. */
+  bankedResets?: BankedResets;
   /** Per-model availability (Codex `model_usage`). */
   models?: ModelAvailability[];
   /** Provider status messages worth showing, e.g. "You're out of credits". */

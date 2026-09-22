@@ -2,6 +2,7 @@ import { decodeJwtPayload } from "../jwt";
 import { describeErrorBody } from "./claude";
 import {
   ProviderError,
+  type BankedResets,
   type Identity,
   type ModelAvailability,
   type TokenSet,
@@ -15,6 +16,7 @@ export const CODEX_REDIRECT_URI = "http://localhost:1455/auth/callback";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const SCOPES = "openid profile email offline_access";
 
 /** Client-side: the browser will land on localhost:1455, and the user pastes that URL back. */
@@ -122,10 +124,14 @@ function normalizeUsage(json: Record<string, unknown>): Usage {
   if (credits?.unlimited) notes.push("Unlimited credits");
   else if (credits?.balance !== null && credits?.balance !== undefined) notes.push(`Credits balance: ${credits.balance}`);
 
+  const resetCredits = json.rate_limit_reset_credits as { available_count?: unknown } | null | undefined;
+  const banked = typeof resetCredits?.available_count === "number" && resetCredits.available_count > 0 ? resetCredits.available_count : 0;
+
   return {
     provider: "codex",
     plan: typeof json.plan_type === "string" ? json.plan_type : undefined,
     windows,
+    bankedResets: banked ? { available: banked, nextExpiresAt: null } : undefined,
     models: models.length ? models : undefined,
     notes: notes.length ? notes : undefined,
     fetchedAt: new Date().toISOString(),
@@ -147,7 +153,30 @@ export async function fetchCodexUsage(accessToken: string, accountId?: string): 
   if (accountId) headers["ChatGPT-Account-Id"] = accountId;
   const res = await fetch(USAGE_URL, { headers, cache: "no-store" });
   if (!res.ok) throw new ProviderError(res.status, await readError(res));
-  return normalizeUsage((await res.json()) as Record<string, unknown>);
+  const usage = normalizeUsage((await res.json()) as Record<string, unknown>);
+  if (usage.bankedResets) usage.bankedResets = await withResetExpiry(usage.bankedResets, headers);
+  return usage;
+}
+
+type ResetCredit = { status?: unknown; expires_at?: unknown };
+
+/**
+ * The usage response only counts banked resets; their expiry (30 days from
+ * the grant) needs the credit list. Best effort: the count stands on its own.
+ */
+async function withResetExpiry(banked: BankedResets, headers: Record<string, string>): Promise<BankedResets> {
+  try {
+    const res = await fetch(RESET_CREDITS_URL, { headers, cache: "no-store" });
+    if (!res.ok) return banked;
+    const json = (await res.json()) as { credits?: ResetCredit[] };
+    const now = Date.now();
+    const live = (json.credits ?? []).filter((c) => typeof c.expires_at === "string" && Date.parse(c.expires_at) > now);
+    const available = live.filter((c) => c.status === "available");
+    const soonest = (available.length ? available : live).map((c) => Date.parse(c.expires_at as string)).sort((a, b) => a - b)[0];
+    return soonest ? { ...banked, nextExpiresAt: new Date(soonest).toISOString() } : banked;
+  } catch {
+    return banked;
+  }
 }
 
 async function tokenRequest(body: Record<string, string>): Promise<TokenSet> {

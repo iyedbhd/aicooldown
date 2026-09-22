@@ -23,6 +23,7 @@ import { CommandPanel } from "./CommandPanel";
 import { Icon } from "./Icon";
 import { Mark, Wordmark } from "./Logo";
 import { Overview } from "./Overview";
+import { LocalPanel } from "./LocalPanel";
 import { GitHubGlyph, ProviderTile } from "./ProviderLogo";
 import { ResetTimeline } from "./ResetTimeline";
 import { ThemeToggle } from "./ThemeToggle";
@@ -456,6 +457,8 @@ export function Dashboard() {
           </div>
         </>
       )}
+
+      {hydrated && <LocalPanel now={now} onNote={flash} />}
 
       <footer className="mt-12 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-line pt-4 font-mono text-[11px] text-faint">
         <span>

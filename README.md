@@ -50,6 +50,8 @@ Both providers expose this information, but they hide it in different places and
 
 **History, and what comes next.** Click any window for a 48-hour chart of your usage with reset markers, then a look ahead: a dashed projection at your current burn rate up to the reset, or to the moment you run dry if that comes first. Built from your own polling history and kept in your browser.
 
+**Banked resets.** Both providers now hand out saved one-time resets that expire (Codex after 30 days). Each account shows how many it has banked and when the next one expires, so none lapse unused. Redeem them in the provider's own app.
+
 **The small things.** Browser notifications when a limit resets or runs out. A countdown in the tab title so a pinned tab is enough. One-click "copy status" for pasting into chat. Rename accounts to whatever makes sense to you. Light and dark themes.
 
 <p align="center">
@@ -95,6 +97,17 @@ npm run dev
 ```
 
 Open http://localhost:3000. Guest mode works with zero configuration. Sign-up works too: it creates a SQLite file at `data/aicooldown.db` and uses a development encryption key with a console warning.
+
+### This machine: switch CLI logins and start the 5-hour clock early
+
+When the app runs on your own computer (`npm run dev`, or `AICOOLDOWN_LOCAL=1` with `npm start`), a **This machine** section appears under your accounts. It works with the Claude Code and Codex CLIs installed here:
+
+- **Save current login** keeps a copy of the login the CLI uses now. To add another account, run `/login` in Claude Code (or `codex login`) with it and save that too. Do not log out first: logging out can revoke the saved login.
+- **Switch to** makes a saved login the one the CLI uses. The outgoing login is saved first, with any tokens the CLI rotated, so nothing is lost. Restart running CLI sessions afterwards.
+- **Say hello** sends `hello` through the CLI as that login (Haiku for Claude). A 5-hour session window starts at your first message, so saying hello before you need the account means it resets sooner.
+- **Schedule** sends that hello at the next reset, after every reset (keeping a fresh window rolling), or at a time you pick. Schedules run in the server process and survive restarts; one missed while the server was down fires when it starts again.
+
+Saved logins live in `data/cli-profiles/`, schedules in `data/local-schedules.json`, both on your machine only. The section is never served on Vercel or to anything but `localhost`. Claude switching needs the file-based login (`~/.claude/.credentials.json`, Windows and Linux); on macOS Claude Code keeps it in the Keychain instead.
 
 ### Deploy
 

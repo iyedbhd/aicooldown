@@ -114,8 +114,25 @@ export function AccountCard({ account, state, history, now, synced, onRefresh, o
         )}
       </div>
 
-      {(usage?.models?.length || usage?.notes?.length || rateLimited || state?.status === "error") && (
+      {(usage?.bankedResets || usage?.models?.length || usage?.notes?.length || rateLimited || state?.status === "error") && (
         <div className="space-y-2 border-t border-line px-4 py-3">
+          {usage?.bankedResets && (
+            <p
+              className="flex items-center justify-between gap-2 rounded-lg bg-emerald-500/10 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-100/90"
+              title={`Saved one-time resets. Redeem them in ${meta.product} when a limit blocks you.`}
+            >
+              <span>
+                <span className="font-semibold tabular-nums">{usage.bankedResets.available}</span> banked reset{usage.bankedResets.available === 1 ? "" : "s"}
+              </span>
+              {usage.bankedResets.nextExpiresAt && (
+                <span className="font-mono text-[11px] tabular-nums opacity-80">
+                  {new Date(usage.bankedResets.nextExpiresAt).getTime() > now
+                    ? `next expires in ${formatCountdown(new Date(usage.bankedResets.nextExpiresAt).getTime() - now)}`
+                    : "expired"}
+                </span>
+              )}
+            </p>
+          )}
           {usage?.models && usage.models.length > 0 && (
             <ul className="space-y-1 font-mono text-[11px]">
               {usage.models.map((m) => {
