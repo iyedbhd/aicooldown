@@ -3,8 +3,10 @@ import type { Account, Provider, Usage, UsageWindow } from "./types";
 
 const SESSION_KEYS = new Set(["five_hour", "primary"]);
 
+/** Codex calls whichever window comes first "primary", so a reported length outranks the key. */
 export function isSessionWindow(w: UsageWindow): boolean {
-  return SESSION_KEYS.has(w.key) || w.windowSeconds === 5 * 3600;
+  if (w.windowSeconds) return w.windowSeconds <= 5 * 3600;
+  return SESSION_KEYS.has(w.key);
 }
 
 export type Pace = {
