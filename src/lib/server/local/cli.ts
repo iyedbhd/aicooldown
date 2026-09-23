@@ -275,7 +275,8 @@ export async function sayHello(id: string): Promise<string> {
   const { bin, args } = cliCommand(meta.provider);
   const shell = process.platform === "win32" && !bin.endsWith(".exe"); // resolves claude.cmd / codex.cmd shims
   return new Promise((resolve, reject) => {
-    const child = spawn(shell ? `"${bin}"` : bin, args, {
+    // An installed CLI, never a project file: the comment stops the build from tracing the whole project.
+    const child = spawn(/* turbopackIgnore: true */ shell ? `"${bin}"` : bin, args, {
       cwd: os.tmpdir(),
       env: childEnv(meta.provider, place, active),
       shell,

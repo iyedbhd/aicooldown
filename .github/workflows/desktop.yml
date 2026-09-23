@@ -29,6 +29,15 @@ jobs:
         shell: bash
         run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
       - run: npm run desktop
+      - name: Start the executable and ask it for the local features
+        shell: bash
+        run: |
+          ./dist/aicooldown-* &
+          app=$!
+          for i in $(seq 60); do curl -sf -o /dev/null http://127.0.0.1:3477/api/local && break; sleep 1; done
+          curl -sf -o /dev/null http://127.0.0.1:3477/
+          curl -sf http://127.0.0.1:3477/api/local
+          kill "$app"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.os }}
