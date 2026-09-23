@@ -74,7 +74,7 @@ async function unpack(appsDir, id) {
   const dir = path.join(appsDir, id);
   if (fs.existsSync(dir)) return dir;
   fs.mkdirSync(appsDir, { recursive: true });
-  // Earlier versions, and unpacks that died midway (one younger than an hour may still be running).
+  // Earlier versions, and unpacks that died midway (one younger than an hour may be another start's, still going).
   for (const name of fs.readdirSync(appsDir)) {
     const stale = path.join(appsDir, name);
     try {
@@ -123,7 +123,8 @@ async function main() {
   if (found === "other") throw new Error(`Port ${PORT} is used by another program. Set AICOOLDOWN_PORT to a free port and start again.`);
 
   const home = appHome();
-  const dataDir = process.env.AICOOLDOWN_DATA_DIR || path.join(home, "data");
+  // Absolute, since the server changes its working directory to the unpacked app.
+  const dataDir = path.resolve(process.env.AICOOLDOWN_DATA_DIR || path.join(home, "data"));
   fs.mkdirSync(dataDir, { recursive: true });
   const appDir = await unpack(path.join(home, "apps"), id);
 

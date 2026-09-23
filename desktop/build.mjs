@@ -25,8 +25,12 @@ const OUT = path.join(ROOT, "dist", `aicooldown-${OS_NAME}-${process.arch}${proc
 const SERVER_ENTRIES = new Set(["server.js", "package.json", ".next", "node_modules", "public"]);
 /** Files that only ever hold local state or secrets. */
 const PRIVATE_FILE = /(^|\/)(\.env[^/]*|\.git|\.vercel|cli-profiles|\.credentials\.json|local-schedules\.json|app-secret|[^/]+\.(db|sqlite3?|pem|key))(\/|$)/;
-/** Credential shapes: Anthropic keys and OAuth tokens, JWTs (Codex and Vercel tokens), GitHub tokens, private keys. */
-const CREDENTIAL = /sk-ant-[a-z]{3}\d{2}-[\w-]{20,}|eyJ[\w-]{10,}\.eyJ[\w-]{10,}\.[\w-]{10,}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_\w{40,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+/**
+ * Credential shapes: Anthropic keys and OAuth tokens, JWTs (Codex and Vercel tokens), GitHub tokens, and
+ * private keys with key material after the header (TLS libraries carry the bare header as a constant).
+ */
+const CREDENTIAL =
+  /sk-ant-[a-z]{3}\d{2}-[\w-]{20,}|eyJ[\w-]{10,}\.eyJ[\w-]{10,}\.[\w-]{10,}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_\w{40,}|-----BEGIN [A-Z ]*PRIVATE KEY-----\s+[A-Za-z0-9+/]{40}/;
 
 function run(command, args, cwd, env = {}) {
   // npm is a .cmd shim on Windows, which only runs through a shell.
