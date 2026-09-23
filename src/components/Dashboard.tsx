@@ -467,7 +467,10 @@ export function Dashboard() {
             <GitHubGlyph size={11} />
             {SITE.repo.replace("https://", "")}
           </a>{" "}
-          · self-host it or run it locally
+          · self-host it or get the{" "}
+          <a href={`${SITE.repo}#desktop-app`} target="_blank" rel="noopener noreferrer" className="text-muted hover:text-fg">
+            desktop app
+          </a>
         </span>
         <span>
           Not affiliated with Anthropic or OpenAI ·{" "}

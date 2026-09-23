@@ -1,4 +1,4 @@
-type Name = "refresh" | "bell" | "bellOff" | "copy" | "check" | "sun" | "moon" | "plus" | "chevron" | "user" | "logout" | "trash" | "clock" | "gauge" | "calendar" | "flame" | "trend" | "star";
+type Name = "refresh" | "bell" | "bellOff" | "copy" | "check" | "sun" | "moon" | "plus" | "chevron" | "user" | "logout" | "trash" | "clock" | "gauge" | "calendar" | "flame" | "trend" | "star" | "download";
 
 const PATHS: Record<Name, string> = {
   star: "M12 2.8l2.8 5.9 6.4.8-4.7 4.5 1.2 6.4L12 17.3l-5.7 3.1 1.2-6.4-4.7-4.5 6.4-.8z",
@@ -19,6 +19,7 @@ const PATHS: Record<Name, string> = {
   calendar: "M4 6h16v14H4zM8 3v4M16 3v4M4 10h16",
   flame: "M12 22c4 0 7-3 7-7 0-3-2-5-3-6-.5 2-1.5 3-2.5 3.5C14 9 13 6 9.5 4 10 8 7 10 6 13c-1 3 1 9 6 9",
   trend: "M3 17l6-6 4 4 8-8M15 7h6v6",
+  download: "M12 3v12M7 10l5 5 5-5M5 21h14",
 };
 
 type Props = { name: Name; size?: number; className?: string; strokeWidth?: number; fill?: boolean };

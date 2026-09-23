@@ -39,6 +39,8 @@ export type LocalState = {
   schedules: HelloSchedule[];
   /** Last hello per profile id. */
   runs: Record<string, HelloRun>;
+  /** Where signing in keeps accounts, e.g. "aicooldown.com"; null for this copy's own database. */
+  accountsServer: string | null;
 };
 
 export type LocalAction =

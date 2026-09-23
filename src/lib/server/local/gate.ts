@@ -11,6 +11,9 @@ export function localEnabled(): boolean {
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
+/** A host name (no port) that only ever means this computer. */
+export const isLoopback = (hostname: string) => LOOPBACK.has(hostname);
+
 /**
  * Only loopback hosts (blocks LAN clients and DNS rebinding) and only
  * same-origin browser requests (blocks other sites posting to localhost).
@@ -18,7 +21,7 @@ const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 export function localRequestAllowed(req: Request): boolean {
   if (!localEnabled()) return false;
   const host = req.headers.get("host") ?? "";
-  if (!LOOPBACK.has(host.replace(/:\d+$/, ""))) return false;
+  if (!isLoopback(host.replace(/:\d+$/, ""))) return false;
   const origin = req.headers.get("origin");
   if (!origin) return true;
   try {

@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
+import { forwardAccounts } from "@/lib/server/accounts-server";
 import { AuthError, createSession, getSessionUser, sameOrigin, sessionCookie, throttle, validateCredentials, type User } from "@/lib/server/auth";
 import { readBody } from "../_lib";
 
 /** Shared body for signed-in account actions: same-origin, throttled, needs a session. */
 export async function accountRoute(req: Request, action: (user: User, body: Record<string, unknown>) => Promise<NextResponse>) {
+  const forwarded = await forwardAccounts(req);
+  if (forwarded) return forwarded;
   if (!sameOrigin(req)) return NextResponse.json({ error: "Cross-site request refused" }, { status: 403 });
   if (!throttle(req)) return NextResponse.json({ error: "Too many attempts. Try again in a few minutes." }, { status: 429 });
   const user = await getSessionUser(req);
@@ -19,6 +22,8 @@ export async function accountRoute(req: Request, action: (user: User, body: Reco
 
 /** Shared body for register and login: validate, run the action, set the cookie. */
 export async function credentialRoute(req: Request, action: (email: string, password: string) => Promise<User>) {
+  const forwarded = await forwardAccounts(req);
+  if (forwarded) return forwarded;
   if (!sameOrigin(req)) return NextResponse.json({ error: "Cross-site request refused" }, { status: 403 });
   if (!throttle(req)) return NextResponse.json({ error: "Too many attempts. Try again in a few minutes." }, { status: 429 });
   const body = await readBody(req);

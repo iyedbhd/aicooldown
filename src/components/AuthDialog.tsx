@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { fetchLocalState } from "@/lib/local";
 import { signIn, type SessionUser } from "@/lib/session";
 import { SITE } from "@/lib/site";
 
@@ -14,12 +15,22 @@ export function AuthDialog({ onSignedIn, onClose, localCount }: Props) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The server accounts live on when this copy forwards them there (the desktop app: aicooldown.com). */
+  const [server, setServer] = useState<string | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  useEffect(() => {
+    let alive = true;
+    void fetchLocalState().then((local) => alive && setServer(local?.accountsServer ?? null));
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -60,8 +71,10 @@ export function AuthDialog({ onSignedIn, onClose, localCount }: Props) {
         </div>
 
         <p className="mt-4 text-xs text-muted">
-          A {SITE.name} account keeps your linked accounts on the server, encrypted, so you see them from any device and the provider
-          tokens never sit in a browser.
+          {server
+            ? `This is your ${SITE.name} account on ${server}, the same one as on the website. It keeps your linked accounts there, encrypted,`
+            : "Signing in keeps your linked accounts on the server, encrypted,"}{" "}
+          so you see them from any device and the provider tokens never sit in a browser.
           {localCount > 0 && ` The ${localCount} account${localCount === 1 ? "" : "s"} in this browser can be moved over after you sign in.`}
         </p>
 

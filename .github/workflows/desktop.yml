@@ -66,6 +66,8 @@ jobs:
           cat > notes.md <<'EOF'
           The AI Cooldown dashboard as a program for your own computer, with the **This machine** features the website cannot offer: switch which account the Claude Code and Codex CLIs are logged in with, and say hello on a schedule so a 5-hour window starts before you need it.
 
+          Sign in with your aicooldown.com account to see the same synced accounts as on the website, or stay a guest and keep everything on your computer.
+
           Download the file for your system and run it. It opens the dashboard at http://localhost:3477 and keeps running while its window is open.
 
           | System | File |

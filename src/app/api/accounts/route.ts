@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAccount, deleteAccount, listAccounts, updateLabel, type NewStoredAccount } from "@/lib/server/accounts";
+import { forwardAccounts } from "@/lib/server/accounts-server";
 import { getSessionUser, sameOrigin } from "@/lib/server/auth";
 import { lookupPlan } from "@/lib/server/usage";
 import { isProvider, readBody, str } from "../_lib";
@@ -13,6 +14,8 @@ async function requireUser(req: Request) {
 }
 
 export async function GET(req: Request) {
+  const forwarded = await forwardAccounts(req);
+  if (forwarded) return forwarded;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   return NextResponse.json({ accounts: await listAccounts(user.id) });
@@ -38,6 +41,8 @@ function parseNew(raw: unknown): NewStoredAccount | null {
 
 /** Creates one account (`{ account }`) or several (`{ accounts: [...] }`, used to import guest data). */
 export async function POST(req: Request) {
+  const forwarded = await forwardAccounts(req);
+  if (forwarded) return forwarded;
   if (!sameOrigin(req)) return NextResponse.json({ error: "Cross-site request refused" }, { status: 403 });
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
@@ -56,6 +61,8 @@ export async function POST(req: Request) {
 }
 
 export async function PATCH(req: Request) {
+  const forwarded = await forwardAccounts(req);
+  if (forwarded) return forwarded;
   if (!sameOrigin(req)) return NextResponse.json({ error: "Cross-site request refused" }, { status: 403 });
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
@@ -68,6 +75,8 @@ export async function PATCH(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  const forwarded = await forwardAccounts(req);
+  if (forwarded) return forwarded;
   if (!sameOrigin(req)) return NextResponse.json({ error: "Cross-site request refused" }, { status: 403 });
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });

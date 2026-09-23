@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { HelloRun, HelloSchedule, LocalState, ScheduleMode } from "@/lib/local";
+import { accountsServerHost } from "@/lib/server/accounts-server";
 import { DATA_DIR } from "@/lib/server/data-dir";
 import type { Provider } from "@/lib/types";
 import { forget, liveState, saveCurrent, sayHello, sessionResetAt, switchTo } from "./cli";
@@ -138,7 +139,7 @@ async function cancelWhere(match: (s: HelloSchedule) => boolean): Promise<void> 
 
 export async function localState(): Promise<LocalState> {
   const [{ live, profiles }, store] = await Promise.all([liveState(), load()]);
-  return { live, profiles, schedules: store.schedules, runs: store.runs };
+  return { live, profiles, schedules: store.schedules, runs: store.runs, accountsServer: accountsServerHost() };
 }
 
 /** The route's actions, validated there. */

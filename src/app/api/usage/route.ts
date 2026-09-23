@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAccount, updatePlan, updateTokens } from "@/lib/server/accounts";
+import { forwardAccounts } from "@/lib/server/accounts-server";
 import { getSessionUser } from "@/lib/server/auth";
 import { lookupPlan, resolveUsage, type Secrets } from "@/lib/server/usage";
 import { errorResponse, isProvider, readBody, str } from "../_lib";
@@ -8,7 +9,8 @@ export const runtime = "nodejs";
 
 /**
  * Two callers:
- *  - signed in: `{ id }` names a stored account; tokens never leave the server.
+ *  - signed in: `{ id }` names a stored account; tokens never leave the server
+ *    (the accounts server, when this copy forwards accounts there).
  *  - guest: `{ account: { provider, accessToken, ... } }` carries the tokens
  *    from the browser; refreshed tokens come back in `tokens`.
  */
@@ -16,6 +18,8 @@ export async function POST(req: Request) {
   const body = await readBody(req);
 
   if (typeof body.id === "string") {
+    const forwarded = await forwardAccounts(req, body);
+    if (forwarded) return forwarded;
     const user = await getSessionUser(req);
     if (!user) return NextResponse.json({ error: "Sign in required", code: "signed_out" }, { status: 401 });
     const stored = await getAccount(user.id, body.id);

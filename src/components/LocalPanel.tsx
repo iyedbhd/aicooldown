@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { formatAgo, formatCountdown, formatDateTime, formatPlan } from "@/lib/format";
 import { fetchLocalState, localAction, type CliProfile, type LocalAction, type LocalState, type ScheduleMode } from "@/lib/local";
 import type { Provider } from "@/lib/types";
+import { DesktopApp } from "./DesktopApp";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
 
@@ -28,25 +29,30 @@ function inAnHour(): string {
  * start a login's 5-hour window now or on a schedule.
  */
 export function LocalPanel({ now, onNote }: { now: number; onNote: (text: string) => void }) {
-  const [state, setState] = useState<LocalState | null>(null);
+  /** undefined until the first answer, null when this copy does not run on the user's computer. */
+  const [state, setState] = useState<LocalState | null | undefined>(undefined);
   const [busy, setBusy] = useState<string | null>(null);
 
-  const reload = useCallback(async () => setState(await fetchLocalState()), []);
+  // A failed refresh keeps what is on screen.
+  const reload = useCallback(async () => {
+    const next = await fetchLocalState();
+    if (next) setState(next);
+  }, []);
 
   useEffect(() => {
     let alive = true;
-    const load = async () => {
-      const next = await fetchLocalState();
-      if (alive) setState(next);
-    };
-    void load();
-    // Scheduled hellos run on the server; pick up their results.
-    const id = setInterval(() => void load(), REFRESH_MS);
+    let id: ReturnType<typeof setInterval> | undefined;
+    void fetchLocalState().then((first) => {
+      if (!alive) return;
+      setState(first);
+      // Scheduled hellos run on the server; pick up their results. Nothing to poll on the website.
+      if (first) id = setInterval(() => void reload(), REFRESH_MS);
+    });
     return () => {
       alive = false;
       clearInterval(id);
     };
-  }, []);
+  }, [reload]);
 
   async function run(key: string, body: LocalAction, done?: string) {
     setBusy(key);
@@ -61,7 +67,8 @@ export function LocalPanel({ now, onNote }: { now: number; onNote: (text: string
     }
   }
 
-  if (!state) return null;
+  if (state === undefined) return null;
+  if (state === null) return <DesktopApp />;
 
   return (
     <section className="mt-8">

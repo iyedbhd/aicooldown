@@ -1,9 +1,9 @@
 import { db, ensureSchema } from "./db";
+import { readCookie, SESSION_COOKIE } from "./cookies";
 import { hashPassword, newId, randomToken, sha256, verifyPassword } from "./crypto";
 
 export type User = { id: string; email: string };
 
-const COOKIE = "aic_session";
 const SESSION_TTL_MS = 30 * 86400_000;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -56,15 +56,6 @@ export async function createSession(userId: string): Promise<string> {
     args: [sha256(token), userId, now + SESSION_TTL_MS, now],
   });
   return token;
-}
-
-function readCookie(req: Request): string | null {
-  const header = req.headers.get("cookie") ?? "";
-  for (const part of header.split(";")) {
-    const [k, ...v] = part.trim().split("=");
-    if (k === COOKIE) return decodeURIComponent(v.join("="));
-  }
-  return null;
 }
 
 export async function getSessionUser(req: Request): Promise<User | null> {
@@ -141,11 +132,11 @@ export async function deleteAccount(user: User, password: unknown): Promise<void
 
 export function sessionCookie(token: string): string {
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  return `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}${secure}`;
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}${secure}`;
 }
 
 export function clearedCookie(): string {
-  return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
 }
 
 /** Rejects cross-site form posts. SameSite=Lax cookies already block most; this closes the rest. */

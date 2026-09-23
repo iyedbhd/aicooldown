@@ -20,6 +20,8 @@ const { gunzipSync } = require("node:zlib");
 /** Fixed, so the dashboard's origin, and the accounts its browser storage holds, stay the same between runs. */
 const PORT = Number(process.env.AICOOLDOWN_PORT) || 3477;
 const ADDRESS = `http://localhost:${PORT}`;
+/** Where signing in keeps accounts: aicooldown.com like the website, a server of your own, or "local" for this computer. */
+const ACCOUNTS = process.env.AICOOLDOWN_ACCOUNTS_SERVER || "https://aicooldown.com";
 
 /** The unpacked server (replaced by each version) and, next to it, the data that outlives versions. */
 function appHome() {
@@ -128,23 +130,26 @@ async function main() {
   fs.mkdirSync(dataDir, { recursive: true });
   const appDir = await unpack(path.join(home, "apps"), id);
 
-  // Everything stays on this computer: the database is the local file, whatever the shell exports.
+  // The local database, used with ACCOUNTS=local, is always the file in the data folder, whatever the shell exports.
   for (const key of ["LIBSQL_URL", "LIBSQL_AUTH_TOKEN", "TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"]) delete process.env[key];
   Object.assign(process.env, {
     AICOOLDOWN_LOCAL: "1",
     AICOOLDOWN_DATA_DIR: dataDir,
+    AICOOLDOWN_ACCOUNTS_SERVER: ACCOUNTS,
     APP_SECRET: appSecret(dataDir),
     HOSTNAME: "127.0.0.1", // loopback only: nothing else on the network can reach it
     PORT: String(PORT),
     NEXT_TELEMETRY_DISABLED: "1",
   });
+  if (ACCOUNTS === "local") delete process.env.AICOOLDOWN_ACCOUNTS_SERVER;
   createRequire(path.join(appDir, "server.js"))("./server.js");
 
   for (let i = 0; (await probe()) !== "ours"; i++) {
     if (i === 120) throw new Error("The server did not start.");
     await sleep(250);
   }
-  console.log(`\nAI Cooldown is running at ${ADDRESS}\nKeep this window open while you use it; close it to stop.\nData: ${dataDir}\n`);
+  console.log(`\nAI Cooldown is running at ${ADDRESS}\nKeep this window open while you use it; close it to stop.`);
+  console.log(`Signing in uses ${ACCOUNTS === "local" ? "accounts kept on this computer" : `your account on ${ACCOUNTS}`}.\nData: ${dataDir}\n`);
   openBrowser();
 }
 
