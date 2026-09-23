@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { HelloRun, HelloSchedule, LocalState, ScheduleMode } from "@/lib/local";
+import { DATA_DIR } from "@/lib/server/data-dir";
 import type { Provider } from "@/lib/types";
 import { forget, liveState, saveCurrent, sayHello, sessionResetAt, switchTo } from "./cli";
 
@@ -11,7 +12,7 @@ import { forget, liveState, saveCurrent, sayHello, sessionResetAt, switchTo } fr
  * it starts again.
  */
 
-const FILE = path.join(process.cwd(), "data", "local-schedules.json");
+const FILE = path.join(DATA_DIR, "local-schedules.json");
 /** Fire a little after the reset so the new window is the one the hello opens. */
 const AFTER_RESET_MS = 60_000;
 const SESSION_MS = 5 * 3600_000;

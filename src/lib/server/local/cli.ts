@@ -7,6 +7,7 @@ import path from "node:path";
 import type { CliProfile } from "@/lib/local";
 import { claudePlanLabel, fetchClaudeIdentity, fetchClaudeUsage, refreshClaudeTokens } from "@/lib/providers/claude";
 import { codexIdentityFromTokens, fetchCodexUsage } from "@/lib/providers/codex";
+import { DATA_DIR } from "@/lib/server/data-dir";
 import { isSessionWindow } from "@/lib/stats";
 import type { Provider } from "@/lib/types";
 
@@ -20,7 +21,7 @@ import type { Provider } from "@/lib/types";
  * still run against it through CLAUDE_CONFIG_DIR / CODEX_HOME.
  */
 
-const PROFILES_DIR = path.join(process.cwd(), "data", "cli-profiles");
+const PROFILES_DIR = path.join(DATA_DIR, "cli-profiles");
 
 /** Raw credential objects, kept verbatim so the CLI reads back exactly what it wrote. */
 type Login =
@@ -246,14 +247,19 @@ function cliCommand(provider: Provider): { bin: string; args: string[] } {
   if (provider === "claude") return { bin: "claude", args: ["-p", HELLO, "--model", "haiku", "--no-session-persistence", "--strict-mcp-config"] };
   // The Codex desktop app on Windows bundles the CLI without putting it on PATH.
   const bundled = process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs", "Codex", "resources", "codex.exe");
-  const bin = process.platform === "win32" && bundled && existsSync(bundled) ? bundled : "codex";
+  // The ignore comment stops the build from tracing (and bundling) every file this path could match.
+  const bin = process.platform === "win32" && bundled && existsSync(/* turbopackIgnore: true */ bundled) ? bundled : "codex";
   return { bin, args: ["exec", "--skip-git-repo-check", "--ephemeral", "--color", "never", HELLO] };
 }
 
-/** The server's own environment may carry auth for a different account (e.g. when started from inside a Claude session). */
+/**
+ * The server's own environment may carry auth for a different account (e.g.
+ * when started from inside a Claude session), and its own secrets, which the
+ * CLI has no business seeing.
+ */
 function childEnv(provider: Provider, place: Place, active: boolean): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  for (const k of Object.keys(env)) if (/^(CLAUDE|ANTHROPIC_|OPENAI_API_KEY$|CODEX_)/.test(k)) delete env[k];
+  for (const k of Object.keys(env)) if (/^(CLAUDE|ANTHROPIC_|OPENAI_API_KEY$|CODEX_|APP_SECRET$|LIBSQL_|TURSO_|AICOOLDOWN_)/.test(k)) delete env[k];
   if (provider === "claude" && (!active || process.env.CLAUDE_CONFIG_DIR)) env.CLAUDE_CONFIG_DIR = place.dir;
   if (provider === "codex" && (!active || process.env.CODEX_HOME)) env.CODEX_HOME = place.dir;
   return env;

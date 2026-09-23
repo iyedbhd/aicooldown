@@ -9,6 +9,7 @@
 
 <p align="center">
   <a href="https://aicooldown.com">Use it now</a> ·
+  <a href="#desktop-app">Desktop app</a> ·
   <a href="#run-it-yourself">Self-host</a> ·
   <a href="#how-it-treats-your-tokens">Security</a> ·
   <a href="https://github.com/iyedbhd/aicooldown/issues">Issues</a>
@@ -87,6 +88,34 @@ The server only ever calls the providers' own usage endpoints. It reads limits a
 
 If you would rather not have your tokens pass through someone else's server at all, that is a reasonable position. Host your own copy. It is one click on Vercel and the code is all here to read.
 
+## Desktop app
+
+The website can only read your limits. On your own computer, AI Cooldown can also work with the Claude Code and Codex CLIs installed there: switch which account each one is logged in with, and say hello on a schedule so a 5-hour window starts before you need it. That is the [This machine](#this-machine-switch-cli-logins-and-start-the-5-hour-clock-early) section.
+
+The easiest way to get it is the desktop app: one file, no Node.js, no setup. Download the one for your system from the [latest release](https://github.com/iyedbhd/aicooldown/releases/latest) and run it. It opens the dashboard at http://localhost:3477 and keeps running while its window is open (scheduled hellos only fire while it runs).
+
+| System | File |
+| --- | --- |
+| Windows | `aicooldown-windows-x64.exe` |
+| macOS, Apple Silicon | `aicooldown-macos-arm64` |
+| macOS, Intel | `aicooldown-macos-x64` |
+| Linux | `aicooldown-linux-x64` |
+
+The files are not code-signed, so the first start needs a nod from you. On Windows, SmartScreen may say it protected your PC: click **More info**, then **Run anyway**. On macOS and Linux, in a terminal:
+
+```bash
+chmod +x aicooldown-macos-arm64
+xattr -d com.apple.quarantine aicooldown-macos-arm64   # macOS only
+./aicooldown-macos-arm64
+```
+
+- **Nothing private is baked in.** Releases are built by GitHub Actions from the tagged source, starting from a clean copy of the repository, and the build refuses to finish if anything private shows up in it: an `.env` value, a database, a saved login, anything shaped like a token or key. The key that encrypts tokens in the local database is generated on your machine the first time it runs. Check a download against `SHA256SUMS.txt` on the release.
+- **Only your computer can reach it.** The server listens on `127.0.0.1` alone.
+- **Your data is in one folder:** `%LOCALAPPDATA%\AI Cooldown` on Windows, `~/Library/Application Support/AI Cooldown` on macOS, `~/.local/share/aicooldown` on Linux. `data` holds the saved CLI logins, schedules, the local database and its key; `apps` is the unpacked program, replaced by each new version.
+- **Port 3477 taken?** Set `AICOOLDOWN_PORT`. Accounts you add as a guest are kept by the browser per address, so stick to one port.
+
+`npm run desktop` builds the file for the system you run it on into `dist/`. Pushing a `v*` tag that matches the version in `package.json` builds all four and publishes the release.
+
 ## Run it yourself
 
 ```bash
@@ -100,14 +129,14 @@ Open http://localhost:3000. Guest mode works with zero configuration. Sign-up wo
 
 ### This machine: switch CLI logins and start the 5-hour clock early
 
-When the app runs on your own computer (`npm run dev`, or `AICOOLDOWN_LOCAL=1` with `npm start`), a **This machine** section appears under your accounts. It works with the Claude Code and Codex CLIs installed here:
+When the app runs on your own computer (the [desktop app](#desktop-app), `npm run dev`, or `AICOOLDOWN_LOCAL=1` with `npm start`), a **This machine** section appears under your accounts. It works with the Claude Code and Codex CLIs installed here:
 
 - **Save current login** keeps a copy of the login the CLI uses now. To add another account, run `/login` in Claude Code (or `codex login`) with it and save that too. Do not log out first: logging out can revoke the saved login.
 - **Switch to** makes a saved login the one the CLI uses. The outgoing login is saved first, with any tokens the CLI rotated, so nothing is lost. Restart running CLI sessions afterwards.
 - **Say hello** sends `hello` through the CLI as that login (Haiku for Claude). A 5-hour session window starts at your first message, so saying hello before you need the account means it resets sooner.
 - **Schedule** sends that hello at the next reset, after every reset (keeping a fresh window rolling), or at a time you pick. Schedules run in the server process and survive restarts; one missed while the server was down fires when it starts again.
 
-Saved logins live in `data/cli-profiles/`, schedules in `data/local-schedules.json`, both on your machine only. The section is never served on Vercel or to anything but `localhost`. Claude switching needs the file-based login (`~/.claude/.credentials.json`, Windows and Linux); on macOS Claude Code keeps it in the Keychain instead.
+Saved logins live in `cli-profiles/` and schedules in `local-schedules.json` inside the data folder (`./data`, the desktop app's `data` folder, or wherever `AICOOLDOWN_DATA_DIR` points), on your machine only. The section is never served on Vercel or to anything but `localhost`. Claude switching needs the file-based login (`~/.claude/.credentials.json`, Windows and Linux); on macOS Claude Code keeps it in the Keychain instead.
 
 ### Deploy
 
@@ -145,6 +174,7 @@ src/lib/server/{db,auth,accounts,crypto}.ts
                              libSQL schema, sessions, encrypted account storage
 src/lib/store.ts             browser-side account store: localStorage or the API
 src/components/*             dashboard UI
+desktop/                     the desktop app: its build script and the launcher inside the executable
 ```
 
 Built with Next.js 16, React 19, Tailwind 4 and libSQL. The name, tagline and domain live in `src/lib/site.ts`; logo files are in `public/` and the `/brand` page shows them with the color tokens.

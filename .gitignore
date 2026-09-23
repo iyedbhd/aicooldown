@@ -10,6 +10,9 @@
 *.tsbuildinfo
 next-env.d.ts
 
+# desktop executables (npm run desktop)
+/dist
+
 # env files: only the example is committed
 .env*
 !.env.example

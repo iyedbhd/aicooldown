@@ -1,9 +1,11 @@
+import path from "node:path";
 import { createClient, type Client } from "@libsql/client";
+import { DATA_DIR } from "./data-dir";
 
 /**
- * One libSQL connection for the process. Locally this is a SQLite file under
- * ./data; in production point LIBSQL_URL (and LIBSQL_AUTH_TOKEN) at Turso or
- * any libSQL server, since serverless filesystems do not persist.
+ * One libSQL connection for the process. Locally this is a SQLite file in the
+ * data directory; in production point LIBSQL_URL (and LIBSQL_AUTH_TOKEN) at
+ * Turso or any libSQL server, since serverless filesystems do not persist.
  */
 let client: Client | null = null;
 let schemaReady: Promise<void> | null = null;
@@ -43,7 +45,9 @@ export function db(): Client {
   if (!client) {
     // TURSO_* are what Vercel's Turso integration injects; LIBSQL_* for any other libSQL server.
     client = createClient({
-      url: process.env.LIBSQL_URL ?? process.env.TURSO_DATABASE_URL ?? "file:data/aicooldown.db",
+      // libSQL percent-decodes file: URLs and stops at ? and #, so those are escaped in the path.
+      // The ignore comment keeps a database file lying in ./data out of the build's traces.
+      url: process.env.LIBSQL_URL ?? process.env.TURSO_DATABASE_URL ?? `file:${path.join(/* turbopackIgnore: true */ DATA_DIR, "aicooldown.db").replace(/[%?#]/g, encodeURIComponent)}`,
       authToken: process.env.LIBSQL_AUTH_TOKEN ?? process.env.TURSO_AUTH_TOKEN,
     });
   }
