@@ -32,9 +32,11 @@ export type HelloSchedule = {
 
 export type HelloRun = { at: number; ok: boolean; message: string; scheduled: boolean };
 
+/** The login a CLI uses right now: null when it has none, `error` when there is one but whose it is can't be told. */
+export type LiveLogin = { label: string; saved: boolean } | { error: string } | null;
+
 export type LocalState = {
-  /** The login each CLI uses right now, if it has one. */
-  live: Record<Provider, { label: string; saved: boolean } | null>;
+  live: Record<Provider, LiveLogin>;
   profiles: CliProfile[];
   schedules: HelloSchedule[];
   /** Last hello per profile id. */

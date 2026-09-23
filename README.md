@@ -130,14 +130,16 @@ Open http://localhost:3000. Guest mode works with zero configuration. Sign-up wo
 
 ### This machine: switch CLI logins and start the 5-hour clock early
 
-When the app runs on your own computer (the [desktop app](#desktop-app), `npm run dev`, or `AICOOLDOWN_LOCAL=1` with `npm start`), a **This machine** section appears under your accounts. It works with the Claude Code and Codex CLIs installed here:
+When the app runs on your own computer (the [desktop app](#desktop-app), `npm run dev`, or `AICOOLDOWN_LOCAL=1` with `npm start`), a **This machine** section appears under your accounts. It works with the Claude Code and Codex CLIs you run in a terminal here. Claude Code in the Claude desktop app signs in on its own: that login is not a CLI login, and it is not shown, saved or switched here. If the panel says the CLI is not signed in, run `claude auth login` (or `codex login`) in a terminal.
 
-- **Save current login** keeps a copy of the login the CLI uses now. To add another account, run `/login` in Claude Code (or `codex login`) with it and save that too. Do not log out first: logging out can revoke the saved login.
-- **Switch to** makes a saved login the one the CLI uses. The outgoing login is saved first, with any tokens the CLI rotated, so nothing is lost. Restart running CLI sessions afterwards.
+- **Save current login** keeps a copy of the login the CLI uses now. To add another account, run `claude auth login` (or `codex login`) with it and save that too. Do not log out first: logging out can revoke the saved login.
+- **Switch to** makes a saved login the one the CLI uses. The outgoing login is saved first, with any tokens the CLI rotated, so nothing is lost. Restart running CLI sessions afterwards. While a saved login is in use, its copy follows the CLI's token refreshes whenever the dashboard is open.
 - **Say hello** sends `hello` through the CLI as that login (Haiku for Claude). A 5-hour session window starts at your first message, so saying hello before you need the account means it resets sooner.
 - **Schedule** sends that hello at the next reset, after every reset (keeping a fresh window rolling), or at a time you pick. Schedules run in the server process and survive restarts; one missed while the server was down fires when it starts again.
 
 Saved logins live in `cli-profiles/` and schedules in `local-schedules.json` inside the data folder (`./data`, the desktop app's `data` folder, or wherever `AICOOLDOWN_DATA_DIR` points), on your machine only. The section is never served on Vercel or to anything but `localhost`. Claude switching needs the file-based login (`~/.claude/.credentials.json`, Windows and Linux); on macOS Claude Code keeps it in the Keychain instead.
+
+To tell Claude logins apart, the app asks Anthropic whose account each token is (the profile request Claude Code itself makes, once per token). The account named in `~/.claude.json` is not enough, because the Claude desktop app writes its own account there too. A login this can't identify, because its access token expired before the app saw it, is not saved or switched until you run `claude` once to refresh it.
 
 ### Deploy
 

@@ -5,7 +5,7 @@ import type { HelloRun, HelloSchedule, LocalState, ScheduleMode } from "@/lib/lo
 import { accountsServerHost } from "@/lib/server/accounts-server";
 import { DATA_DIR } from "@/lib/server/data-dir";
 import type { Provider } from "@/lib/types";
-import { forget, liveState, saveCurrent, sayHello, sessionResetAt, switchTo } from "./cli";
+import { forget, liveState, saveCurrent, sayHello, sessionResetAt, switchTo, updateSavedCopy } from "./cli";
 
 /**
  * Scheduled hellos, kept in data/local-schedules.json and armed as timers in
@@ -137,7 +137,21 @@ async function cancelWhere(match: (s: HelloSchedule) => boolean): Promise<void> 
   });
 }
 
+const copyUpdates = new Set<Provider>();
+
+/** Queued behind the provider's CLI operations (a switch or forget touches the same files), one at a time. */
+function queueCopyUpdate(provider: Provider): void {
+  if (copyUpdates.has(provider)) return;
+  copyUpdates.add(provider);
+  void serialize(provider, () => updateSavedCopy(provider))
+    .catch(() => undefined)
+    .finally(() => copyUpdates.delete(provider));
+}
+
 export async function localState(): Promise<LocalState> {
+  // The dashboard asks for this every 30 seconds: often enough to catch each token refresh by the CLI.
+  queueCopyUpdate("claude");
+  queueCopyUpdate("codex");
   const [{ live, profiles }, store] = await Promise.all([liveState(), load()]);
   return { live, profiles, schedules: store.schedules, runs: store.runs, accountsServer: accountsServerHost() };
 }

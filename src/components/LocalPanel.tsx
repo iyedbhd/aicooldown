@@ -9,8 +9,13 @@ import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
 
 const CLI_NAME: Record<Provider, string> = { claude: "Claude Code CLI", codex: "Codex CLI" };
+const NOT_SIGNED_IN: Record<Provider, string> = {
+  claude:
+    "The Claude Code CLI is not signed in on this machine. Claude Code in the Claude desktop app uses the app's own sign-in, which can't be saved or switched here. Run `claude auth login` in a terminal to sign the CLI in.",
+  codex: "The Codex CLI is not signed in on this machine. Run `codex login` in a terminal to sign it in.",
+};
 const LOGIN_HINT: Record<Provider, string> = {
-  claude: "To add another account, run /login in Claude Code with it, then save it here. Do not /logout first: that can revoke the saved login.",
+  claude: "To add another account, run `claude auth login` in a terminal with it, then save it here. Do not log out first: that can revoke the saved login.",
   codex: "To add another account, run `codex login` with it, then save it here. Do not `codex logout` first: that can revoke the saved login.",
 };
 const MODE_LABEL: Record<ScheduleMode, string> = { reset: "at next reset", "every-reset": "after every reset", at: "at a time" };
@@ -74,11 +79,14 @@ export function LocalPanel({ now, onNote }: { now: number; onNote: (text: string
     <section className="mt-8">
       <h2 className="mb-1 text-sm font-medium text-muted">This machine</h2>
       <p className="mb-3 text-xs text-faint">
-        Only in a copy running on your computer. Switch the login each CLI uses, or say hello to start a 5-hour window now so it resets sooner.
+        Only in a copy running on your computer. Switch the login the Claude Code and Codex CLIs use in your terminal, or say hello to start a 5-hour window
+        now so it resets sooner.
       </p>
       <div className="grid gap-4 md:grid-cols-2">
         {(["claude", "codex"] as const).map((provider) => {
           const live = state.live[provider];
+          const signedIn = live && "label" in live ? live : null;
+          const problem = live && "error" in live ? live.error : null;
           const profiles = state.profiles.filter((p) => p.provider === provider);
           return (
             <div key={provider} className="rounded-2xl border border-line bg-panel">
@@ -87,14 +95,18 @@ export function LocalPanel({ now, onNote }: { now: number; onNote: (text: string
                   <ProviderGlyph provider={provider} size={16} />
                   {CLI_NAME[provider]}
                 </span>
-                {live && !live.saved && (
-                  <button type="button" disabled={busy !== null} onClick={() => void run(`save-${provider}`, { action: "save", provider }, `Saved ${live.label}.`)} className="btn">
+                {signedIn && !signedIn.saved && (
+                  <button type="button" disabled={busy !== null} onClick={() => void run(`save-${provider}`, { action: "save", provider }, `Saved ${signedIn.label}.`)} className="btn">
                     <Icon name="plus" />
                     {busy === `save-${provider}` ? "…" : "Save current login"}
                   </button>
                 )}
               </header>
-              <p className="px-4 pt-3 font-mono text-[11px] text-faint">{live ? `signed in as ${live.label}` : "no CLI login found on this machine"}</p>
+              {signedIn ? (
+                <p className="px-4 pt-3 font-mono text-[11px] text-faint">signed in as {signedIn.label}</p>
+              ) : (
+                <p className={`px-4 pt-3 text-xs ${problem ? "text-rose-600 dark:text-rose-400" : "text-muted"}`}>{problem ?? NOT_SIGNED_IN[provider]}</p>
+              )}
               <ul className="divide-y divide-line px-4">
                 {profiles.map((p) => (
                   <ProfileRow key={p.id} profile={p} state={state} now={now} busy={busy} run={run} />

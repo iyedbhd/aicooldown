@@ -4,12 +4,12 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { CliProfile } from "@/lib/local";
-import { claudePlanLabel, fetchClaudeIdentity, fetchClaudeUsage, refreshClaudeTokens } from "@/lib/providers/claude";
+import type { CliProfile, LiveLogin } from "@/lib/local";
+import { claudePlanLabel, fetchClaudeAccount, fetchClaudeUsage, refreshClaudeTokens } from "@/lib/providers/claude";
 import { codexIdentityFromTokens, fetchCodexUsage } from "@/lib/providers/codex";
 import { DATA_DIR } from "@/lib/server/data-dir";
 import { isSessionWindow } from "@/lib/stats";
-import type { Provider } from "@/lib/types";
+import { ProviderError, type Provider } from "@/lib/types";
 
 /**
  * Account switching the way the CLIs allow it: each saved login is a copy of
@@ -86,12 +86,52 @@ async function writeLogin(login: Login, place: Place): Promise<void> {
   await writeJson(place.claudeConfig, { ...config, oauthAccount: login.oauthAccount });
 }
 
-function accessToken(login: Login): string {
-  if (login.provider === "codex") return (login.auth.tokens as { access_token: string }).access_token;
-  return (login.credentials.claudeAiOauth as { accessToken: string }).accessToken;
+/** The token a refresh replaces: two copies of a login holding the same one are in the same state. */
+function currentToken(login: Login): string {
+  if (login.provider === "codex") {
+    const t = login.auth.tokens as { access_token: string; refresh_token?: string };
+    return t.refresh_token ?? t.access_token;
+  }
+  const oauth = login.credentials.claudeAiOauth as { accessToken: string; refreshToken?: string };
+  return oauth.refreshToken ?? oauth.accessToken;
 }
 
-/** A stable key for "the same account", independent of token rotation. */
+/** How Claude Code names an account in oauthAccount; saved Claude logins are keyed the same way. */
+const claudeKey = (accountUuid: string, organizationUuid?: string) => `${accountUuid}:${organizationUuid ?? ""}`;
+
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+
+const LOOKUP_RETRY_MS = 5 * 60_000;
+const claudeAccounts = new Map<string, Promise<{ key: string; email?: string }>>();
+
+/** Whose account a Claude access token is, asked of Anthropic once per token; a failed lookup is retried after a while. */
+function claudeAccount(accessToken: string): Promise<{ key: string; email?: string }> {
+  const id = sha256(accessToken);
+  let lookup = claudeAccounts.get(id);
+  if (!lookup) {
+    lookup = fetchClaudeAccount(accessToken).then(({ accountUuid, organizationUuid, email }) => {
+      const key = accountUuid ? claudeKey(accountUuid, organizationUuid) : email;
+      if (!key) throw new Error("Anthropic did not say which account it is.");
+      return { key, email };
+    });
+    claudeAccounts.set(id, lookup);
+    lookup.catch(() => setTimeout(() => claudeAccounts.delete(id), LOOKUP_RETRY_MS).unref());
+  }
+  return lookup;
+}
+
+/** The saved login this one is in the same state as, if any. */
+async function savedCopyOf(login: Login): Promise<Meta | undefined> {
+  const token = currentToken(login);
+  for (const meta of await listMeta()) {
+    if (meta.provider !== login.provider) continue;
+    const saved = await readLogin(meta.provider, profilePlace(meta.provider, meta.id));
+    if (saved && currentToken(saved) === token) return meta;
+  }
+  return undefined;
+}
+
+/** A stable key for "the same account", independent of token rotation. Only ever asked about the CLI's live login. */
 async function identify(login: Login): Promise<{ key: string; label: string; plan?: string }> {
   if (login.provider === "codex") {
     const t = login.auth.tokens as { access_token: string; id_token?: string; account_id?: string };
@@ -99,16 +139,33 @@ async function identify(login: Login): Promise<{ key: string; label: string; pla
     const email = id.email ?? "Codex login";
     return { key: `${t.account_id ?? id.accountId ?? ""}:${email}`, label: email, plan: id.plan };
   }
-  const oauth = login.credentials.claudeAiOauth as { subscriptionType?: string; rateLimitTier?: string };
+  // Not from oauthAccount in ~/.claude.json: every Claude Code on this machine writes its own account there,
+  // the Claude desktop app's included. The token is what counts.
+  const oauth = login.credentials.claudeAiOauth as { accessToken: string; subscriptionType?: string; rateLimitTier?: string };
   const plan = claudePlanLabel({ subscriptionType: oauth.subscriptionType, rateLimitTier: oauth.rateLimitTier });
-  const acct = login.oauthAccount as { accountUuid?: string; organizationUuid?: string; emailAddress?: string } | undefined;
-  if (acct?.accountUuid) return { key: `${acct.accountUuid}:${acct.organizationUuid ?? ""}`, label: acct.emailAddress ?? "Claude login", plan };
-  const email = (await fetchClaudeIdentity(accessToken(login)).catch(() => ({ email: undefined }))).email;
-  if (!email) throw new Error("Could not tell which Claude account this login belongs to.");
-  return { key: email, label: email, plan };
+  // A saved login the CLI has not refreshed since: known without asking, even once its access token has expired.
+  const copy = await savedCopyOf(login);
+  if (copy) return { key: copy.key, label: copy.label, plan };
+  try {
+    const account = await claudeAccount(oauth.accessToken);
+    return { key: account.key, label: account.email ?? "Claude login", plan };
+  } catch (err) {
+    throw new Error(
+      err instanceof ProviderError && err.status === 401
+        ? "The Claude Code CLI's access token has expired, so which account it is can't be checked. Run claude in a terminal once to refresh it, then try again."
+        : `Could not check which account the Claude Code CLI is signed in with: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
-const profileId = (provider: Provider, key: string) => createHash("sha256").update(`${provider}:${key}`).digest("hex").slice(0, 12);
+/** The login without an oauthAccount block that names another account (the Claude desktop app writes its own there). */
+function withOwnAccount(login: Login, key: string): Login {
+  if (login.provider !== "claude" || !login.oauthAccount) return login;
+  const { accountUuid, organizationUuid } = login.oauthAccount as { accountUuid?: string; organizationUuid?: string };
+  return accountUuid && claudeKey(accountUuid, organizationUuid) === key ? login : { ...login, oauthAccount: undefined };
+}
+
+const profileId = (provider: Provider, key: string) => sha256(`${provider}:${key}`).slice(0, 12);
 
 async function listMeta(): Promise<Meta[]> {
   const out: Meta[] = [];
@@ -134,7 +191,7 @@ async function saveLogin(login: Login): Promise<Meta> {
   const id = profileId(login.provider, who.key);
   const place = profilePlace(login.provider, id);
   const previous = (await readJson(path.join(place.dir, "profile.json"))) as Meta | null;
-  await writeLogin(login, place);
+  await writeLogin(withOwnAccount(login, who.key), place);
   const meta: Meta = { id, provider: login.provider, key: who.key, label: who.label, plan: who.plan, savedAt: previous?.savedAt ?? Date.now() };
   await writeJson(path.join(place.dir, "profile.json"), meta);
   return meta;
@@ -145,19 +202,20 @@ async function liveKey(provider: Provider): Promise<string | null> {
   return login ? (await identify(login).catch(() => null))?.key ?? null : null;
 }
 
-export async function liveState(): Promise<{
-  live: Record<Provider, { label: string; saved: boolean } | null>;
-  profiles: CliProfile[];
-}> {
+export async function liveState(): Promise<{ live: Record<Provider, LiveLogin>; profiles: CliProfile[] }> {
   const metas = await listMeta();
-  const live: Record<Provider, { label: string; saved: boolean } | null> = { claude: null, codex: null };
+  const live: Record<Provider, LiveLogin> = { claude: null, codex: null };
   const activeKeys: Record<Provider, string | null> = { claude: null, codex: null };
   for (const provider of ["claude", "codex"] as const) {
     const login = await readLogin(provider, livePlace(provider));
-    const who = login ? await identify(login).catch(() => null) : null;
-    if (!who) continue;
-    activeKeys[provider] = who.key;
-    live[provider] = { label: who.label, saved: metas.some((m) => m.provider === provider && m.key === who.key) };
+    if (!login) continue;
+    try {
+      const who = await identify(login);
+      activeKeys[provider] = who.key;
+      live[provider] = { label: who.label, saved: metas.some((m) => m.provider === provider && m.key === who.key) };
+    } catch (err) {
+      live[provider] = { error: err instanceof Error ? err.message : String(err) };
+    }
   }
   const profiles = metas.map((m) => ({ id: m.id, provider: m.provider, label: m.label, plan: m.plan, savedAt: m.savedAt, active: activeKeys[m.provider] === m.key }));
   return { live, profiles };
@@ -168,10 +226,24 @@ export async function saveCurrent(provider: Provider): Promise<void> {
   if (!login) {
     throw new Error(
       provider === "claude"
-        ? "No Claude Code CLI login found (~/.claude/.credentials.json). Run `claude` in a terminal and /login first."
-        : "No Codex CLI login found (~/.codex/auth.json). Run `codex login` first.",
+        ? "The Claude Code CLI is not signed in on this machine. Run `claude auth login` in a terminal first."
+        : "The Codex CLI is not signed in on this machine. Run `codex login` in a terminal first.",
     );
   }
+  await saveLogin(login);
+}
+
+/**
+ * Keeps a saved login's copy in step with the CLI while it is the one in use:
+ * the CLI rotates refresh tokens, so a copy left behind stops working, and a
+ * copy in step is recognized without asking, even after its access token expires.
+ */
+export async function updateSavedCopy(provider: Provider): Promise<void> {
+  const login = await readLogin(provider, livePlace(provider));
+  if (!login || (await savedCopyOf(login))) return;
+  const who = await identify(login).catch(() => null);
+  // Only a login saved here already; saving a new one is the user's call.
+  if (!who || !(await listMeta()).some((m) => m.provider === provider && m.key === who.key)) return;
   await saveLogin(login);
 }
 

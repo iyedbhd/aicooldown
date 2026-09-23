@@ -230,19 +230,35 @@ function findString(obj: unknown, pattern: RegExp, depth = 0): string | undefine
   return undefined;
 }
 
-export async function fetchClaudeIdentity(accessToken: string): Promise<Identity> {
+type Profile = {
+  account?: { uuid?: string; email?: string; email_address?: string; has_claude_max?: boolean; has_claude_pro?: boolean };
+  organization?: { uuid?: string };
+};
+
+async function fetchProfile(accessToken: string): Promise<Profile> {
   const res = await fetch(PROFILE_URL, { headers: apiHeaders(accessToken), cache: "no-store" });
   if (!res.ok) throw new ProviderError(res.status, await readError(res));
-  const json = (await res.json()) as {
-    account?: { email_address?: string; has_claude_max?: boolean; has_claude_pro?: boolean };
-  };
+  return (await res.json()) as Profile;
+}
+
+// The profile names it `email`; token responses name it `email_address`.
+const profileEmail = (json: Profile) => json.account?.email ?? json.account?.email_address;
+
+export async function fetchClaudeIdentity(accessToken: string): Promise<Identity> {
+  const json = await fetchProfile(accessToken);
   const plan = claudePlanLabel({
     subscriptionType: findString(json, /^subscription_?type$/i),
     rateLimitTier: findString(json, /^rate_?limit_?tier$/i),
     hasMax: json.account?.has_claude_max,
     hasPro: json.account?.has_claude_pro,
   });
-  return { email: json.account?.email_address, plan };
+  return { email: profileEmail(json), plan };
+}
+
+/** Whose token this is: the account and organization Claude Code keeps as oauthAccount in .claude.json. */
+export async function fetchClaudeAccount(accessToken: string): Promise<{ accountUuid?: string; organizationUuid?: string; email?: string }> {
+  const json = await fetchProfile(accessToken);
+  return { accountUuid: json.account?.uuid, organizationUuid: json.organization?.uuid, email: profileEmail(json) };
 }
 
 async function tokenRequest(body: Record<string, string>): Promise<TokenSet> {
