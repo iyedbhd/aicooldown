@@ -7,7 +7,8 @@
  * gitignored (.env files, ./data, personal and editor files) can reach the
  * executable, and the result is checked for private data before it is packed.
  * The standalone Next.js server is then packed into a copy of this Node binary
- * as a single executable application, started by desktop/launcher.js.
+ * as a single executable application, started by desktop/launcher.js. On
+ * Windows it also takes the app's icon (desktop/icon.ico, from npm run brand).
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -15,6 +16,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
@@ -94,6 +96,41 @@ function checkForLeaks(names, contents) {
   return secrets.length;
 }
 
+/**
+ * Swaps node.exe's icon and name in the Windows executable for the app's, so
+ * Explorer shows the AI Cooldown icon and Task Manager says "AI Cooldown"
+ * rather than "Node.js JavaScript Runtime". Runs after postject: resizing the
+ * resources can move the sections behind them, which postject's PE parser
+ * misreads, and once the blob is in, the resources are the file's last section.
+ */
+async function brandWindowsExe(repoRequire, repo, version) {
+  const { Data, NtExecutable, NtExecutableResource, Resource } = await import(pathToFileURL(repoRequire.resolve("resedit")).href);
+  const exe = NtExecutable.from(fs.readFileSync(OUT), { ignoreCert: true });
+  const res = NtExecutableResource.from(exe);
+  const icons = Data.IconFile.from(fs.readFileSync(path.join(repo, "desktop", "icon.ico"))).icons.map((icon) => icon.data);
+  for (const group of Resource.IconGroupEntry.fromEntries(res.entries)) Resource.IconGroupEntry.replaceIconsForResource(res.entries, group.id, group.lang, icons);
+
+  const [info] = Resource.VersionInfo.fromEntries(res.entries);
+  const [major, minor, patch] = version.split(/[.-]/, 3).map(Number);
+  info.setFileVersion(major, minor, patch);
+  info.setProductVersion(major, minor, patch);
+  for (const lang of info.getAllLanguagesForStringValues()) {
+    info.setStringValues(lang, {
+      ProductName: "AI Cooldown",
+      FileDescription: "AI Cooldown",
+      CompanyName: "AI Cooldown",
+      InternalName: "aicooldown",
+      OriginalFilename: path.basename(OUT),
+      FileVersion: version,
+      ProductVersion: version,
+      LegalCopyright: "MIT license. Includes Node.js, copyright Node.js contributors, MIT license.",
+    });
+  }
+  info.outputToResourceEntries(res.entries);
+  res.outputResource(exe);
+  fs.writeFileSync(OUT, Buffer.from(exe.generate()));
+}
+
 async function build(work) {
   const repo = path.join(work, "repo");
   const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" }).split("\0").filter(Boolean);
@@ -144,11 +181,13 @@ async function build(work) {
   fs.chmodSync(OUT, 0o755);
   if (process.platform === "darwin") run("codesign", ["--remove-signature", OUT], work);
   // On Windows this drops node.exe's signature (postject warns it "seems corrupted"): the result is plainly unsigned.
-  const { inject } = createRequire(path.join(repo, "package.json"))("postject");
+  const repoRequire = createRequire(path.join(repo, "package.json"));
+  const { inject } = repoRequire("postject");
   await inject(OUT, "NODE_SEA_BLOB", fs.readFileSync(path.join(work, "sea.blob")), {
     sentinelFuse: "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2",
     machoSegmentName: process.platform === "darwin" ? "NODE_SEA" : undefined,
   });
+  if (process.platform === "win32") await brandWindowsExe(repoRequire, repo, version);
   // Apple Silicon only runs signed code; an ad-hoc signature is enough.
   if (process.platform === "darwin") run("codesign", ["--sign", "-", OUT], work);
 

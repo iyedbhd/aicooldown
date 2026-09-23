@@ -31,7 +31,7 @@ export async function requestNotifyPermission(): Promise<PermissionResult> {
 
 function send(title: string, body: string, tag: string): void {
   try {
-    new Notification(title, { body, tag, icon: "/icon.svg" });
+    new Notification(title, { body, tag, icon: "/icon.png" });
   } catch {
     /* some browsers throw outside a secure context */
   }

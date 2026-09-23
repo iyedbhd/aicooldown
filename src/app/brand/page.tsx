@@ -1,19 +1,30 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { BRAND, Mark, Wordmark } from "@/components/Logo";
+import { Mark, Wordmark } from "@/components/Logo";
+import { BRAND } from "@/lib/brand";
 import { SITE } from "@/lib/site";
 
 export const metadata: Metadata = { title: "Brand" };
 
-const RING_NAMES = ["red", "orange", "amber", "yellow", "lime", "green"];
-const COLORS: { name: string; value: string; use: string }[] = [
-  { name: "ink", value: BRAND.ink, use: "tile" },
+const RING_NAMES = ["amber", "coral", "pink", "violet", "blue", "cyan"];
+const COLORS: { name: string; value: string; swatch?: string; use: string }[] = [
+  { name: "ink", value: `${BRAND.inkTop} → ${BRAND.ink}`, swatch: `linear-gradient(135deg, ${BRAND.inkTop}, ${BRAND.ink})`, use: "tile" },
+  { name: "halo", value: BRAND.halo, use: "glow behind the sparkle" },
   { name: "tip", value: BRAND.tip, use: "head dot" },
+  { name: "ice", value: BRAND.ice, use: "sparkle, from white" },
   ...BRAND.ring.map((value, i) => ({
     name: RING_NAMES[i],
     value,
     use: i === 0 ? "ring · head" : i === BRAND.ring.length - 1 ? "ring · tail" : "ring",
   })),
+];
+
+const DOWNLOADS = [
+  ["/mark.svg", "animated square tile"],
+  ["/logo.svg", "lockup for dark backgrounds"],
+  ["/logo-on-light.svg", "lockup for light backgrounds"],
+  ["/icon.svg", "favicon, bolder for 16px"],
+  ["/icon.png", "192px PNG"],
 ];
 
 export default function BrandPage() {
@@ -26,9 +37,9 @@ export default function BrandPage() {
       </p>
       <h1 className="mt-2 text-2xl font-semibold text-fg">Brand assets</h1>
       <p className="mt-1 max-w-2xl text-sm text-muted">
-        One ring, almost full, with a white-hot head. The colour runs along the arc: red at the head, orange, amber,
-        yellow, then lime and green at the tail, a meter clearing as the cooldown runs out. Free to use when linking to
-        or writing about {SITE.name}.
+        One ring, almost full, running hot to cold: amber at a white-hot head, then coral, pink, violet and blue, to ice
+        cyan at the tail, a cooldown running out. Inside it, the AI sparkle, which flares when the ring closes. Free to
+        use when linking to or writing about {SITE.name}.
       </p>
 
       <section className="mt-8 grid gap-px border border-line bg-line sm:grid-cols-2">
@@ -56,10 +67,10 @@ export default function BrandPage() {
 
       <section className="mt-8">
         <p className="eyebrow">colors</p>
-        <ul className="mt-2 grid grid-cols-2 gap-px border border-line bg-line sm:grid-cols-4 lg:grid-cols-8">
+        <ul className="mt-2 grid grid-cols-2 gap-px border border-line bg-line sm:grid-cols-5">
           {COLORS.map((c) => (
             <li key={c.name} className="bg-panel p-3">
-              <div className="h-10 w-full" style={{ background: c.value }} />
+              <div className="h-10 w-full" style={{ background: c.swatch ?? c.value }} />
               <div className="mt-2 text-sm text-fg-2">{c.name}</div>
               <div className="font-mono text-[11px] text-muted">{c.value}</div>
               <div className="text-[11px] text-faint">{c.use}</div>
@@ -71,24 +82,14 @@ export default function BrandPage() {
       <section className="mt-8">
         <p className="eyebrow">downloads</p>
         <ul className="mt-2 flex flex-wrap gap-4 font-mono text-[12px]">
-          <li>
-            <a href="/mark.svg" download className="text-accent hover:underline">
-              mark.svg
-            </a>{" "}
-            <span className="text-faint">animated square tile</span>
-          </li>
-          <li>
-            <a href="/logo.svg" download className="text-accent hover:underline">
-              logo.svg
-            </a>{" "}
-            <span className="text-faint">horizontal lockup</span>
-          </li>
-          <li>
-            <a href="/icon.svg" download className="text-accent hover:underline">
-              icon.svg
-            </a>{" "}
-            <span className="text-faint">favicon, thicker for 16px</span>
-          </li>
+          {DOWNLOADS.map(([href, what]) => (
+            <li key={href}>
+              <a href={href} download className="text-accent hover:underline">
+                {href.slice(1)}
+              </a>{" "}
+              <span className="text-faint">{what}</span>
+            </li>
+          ))}
         </ul>
       </section>
     </main>

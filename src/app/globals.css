@@ -245,8 +245,9 @@ body {
 }
 
 /*
- * Logo: a cooldown. The ring fills head-to-tail (a mask un-dashes along the
- * arc), holds full while the head dot pings "ready", fades, and starts over.
+ * Logo: a cooldown (lib/brand.ts). The ring fills head-to-tail (a mask
+ * un-dashes along the arc) while the sparkle waits dimmed, holds full while
+ * the sparkle flares and the head dot pings "ready", fades, and starts over.
  */
 @keyframes cooldown-fill {
   0% {
@@ -294,6 +295,32 @@ body {
   transform-origin: center;
   animation: cooldown-ping 6s ease-out infinite;
 }
+@keyframes cooldown-spark {
+  0%,
+  62% {
+    transform: scale(0.8);
+    opacity: 0.3;
+  }
+  67% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+  73%,
+  86% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  93%,
+  100% {
+    transform: scale(0.8);
+    opacity: 0.3;
+  }
+}
+.cooldown-spark {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cooldown-spark 6s ease-in-out infinite;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .fade-in,
@@ -301,6 +328,7 @@ body {
   .live-dot,
   .cooldown-fill,
   .cooldown-ping,
+  .cooldown-spark,
   .shimmer,
   .toast,
   .spin,

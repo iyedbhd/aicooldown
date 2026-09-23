@@ -1,5 +1,10 @@
 <p align="center">
-  <a href="https://aicooldown.com"><img src="public/logo.svg" alt="AI Cooldown" width="340"></a>
+  <a href="https://aicooldown.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="public/logo.svg">
+      <img src="public/logo-on-light.svg" alt="AI Cooldown" width="320">
+    </picture>
+  </a>
 </p>
 
 <p align="center">
@@ -180,7 +185,7 @@ src/components/*             dashboard UI
 desktop/                     the desktop app: its build script and the launcher inside the executable
 ```
 
-Built with Next.js 16, React 19, Tailwind 4 and libSQL. The name, tagline and domain live in `src/lib/site.ts`; logo files are in `public/` and the `/brand` page shows them with the color tokens.
+Built with Next.js 16, React 19, Tailwind 4 and libSQL. The name, tagline and domain live in `src/lib/site.ts`. The logo is drawn in `src/lib/brand.ts`: `npm run brand` writes every logo file from it (`public/`, the favicons in `src/app/`, the desktop app's icon), and the `/brand` page shows them with the color tokens.
 
 ## Contributing
 
