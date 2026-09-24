@@ -53,7 +53,12 @@ stopApp(); // in case the installer started it with its own update settings
 const programs = path.join(process.env.LOCALAPPDATA, "Programs");
 const installDir = path.join(programs, fs.readdirSync(programs).find((d) => fs.existsSync(path.join(programs, d, "AI Cooldown.exe"))));
 const exe = path.join(installDir, "AI Cooldown.exe");
-const installedVersion = () => powershell(`(Get-Item '${exe}').VersionInfo.ProductVersion`);
+/** x.y.z of the installed executable (Windows says x.y.z.0), or "" while an update has it replaced. */
+const installedVersion = () =>
+  powershell(`(Get-Item '${exe}' -ErrorAction SilentlyContinue).VersionInfo.ProductVersion`)
+    .split(".")
+    .slice(0, 3)
+    .join(".");
 const oldVersion = installedVersion();
 fs.writeFileSync(path.join(installDir, "resources", "app-update.yml"), "provider: generic\nurl: http://127.0.0.1:8123\nupdaterCacheDirName: aicooldown-updater\n");
 
@@ -68,7 +73,10 @@ try {
   await sleep(2000);
 
   powershell("(Get-Process 'AI Cooldown' | Where-Object MainWindowHandle -ne 0).CloseMainWindow()");
-  await waitFor(`version ${newVersion} to be installed`, () => installedVersion() === newVersion);
+  let seen = oldVersion;
+  await waitFor(`version ${newVersion} to be installed`, () => (seen = installedVersion() || seen) === newVersion).catch((err) => {
+    throw new Error(`${err.message} Installed now: ${seen}.`);
+  });
   await waitFor("the updated app's server", serverAnswers);
   await sleep(3000);
   const visible = powershell("@(Get-Process 'AI Cooldown' | Where-Object MainWindowHandle -ne 0).Count");
