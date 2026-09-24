@@ -9,9 +9,9 @@ type Os = "windows" | "macos" | "linux";
 /** As the release workflow names them; /releases/latest/download/<file> always serves the newest. */
 const DOWNLOADS: { os: Os; label: string; file: string }[] = [
   { os: "windows", label: "Windows", file: "aicooldown-windows-x64.exe" },
-  { os: "macos", label: "macOS (Apple Silicon)", file: "aicooldown-macos-arm64" },
-  { os: "macos", label: "macOS (Intel)", file: "aicooldown-macos-x64" },
-  { os: "linux", label: "Linux", file: "aicooldown-linux-x64" },
+  { os: "macos", label: "macOS (Apple Silicon)", file: "aicooldown-macos-arm64.dmg" },
+  { os: "macos", label: "macOS (Intel)", file: "aicooldown-macos-x64.dmg" },
+  { os: "linux", label: "Linux", file: "aicooldown-linux-x64.AppImage" },
 ];
 
 const download = (file: string) => `${SITE.repo}/releases/latest/download/${file}`;
@@ -41,8 +41,8 @@ export function DesktopApp() {
     <section className="mt-8">
       <h2 className="mb-1 text-sm font-medium text-muted">Desktop app</h2>
       <p className="mb-3 text-xs text-faint">
-        This dashboard on your own computer, plus what a website cannot do: switch which account the Claude Code and Codex CLIs are logged in with, and say
-        hello on a schedule so a 5-hour window starts before you need it. Your {SITE.name} account works there too.
+        This dashboard as an app on your own computer, in its own window, plus what a website cannot do: switch which account the Claude Code and Codex
+        CLIs are logged in with, and say hello on a schedule so a 5-hour window starts before you need it. Your {SITE.name} account works there too.
       </p>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-line bg-panel px-4 py-3">
         {primary && (
