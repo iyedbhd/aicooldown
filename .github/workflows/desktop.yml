@@ -1,5 +1,5 @@
-# Builds the desktop executables. A pushed v* tag also publishes them as a
-# GitHub release; running it by hand only leaves them as workflow artifacts.
+# Builds the desktop app's installers. A pushed v* tag also publishes them as
+# a GitHub release; running it by hand only leaves them as workflow artifacts.
 name: Desktop app
 
 on:
@@ -19,7 +19,7 @@ jobs:
         os: [windows-latest, macos-latest, macos-15-intel, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      # Actions are pinned to commits: whatever runs here ends up inside the executables.
+      # Actions are pinned to commits: whatever runs here ends up inside the app.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -31,19 +31,16 @@ jobs:
         shell: bash
         run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
       - run: npm run desktop
-      - name: Start the executable and ask it for the local features
+      - name: Install and start the app, then ask it for the local features
         shell: bash
-        run: |
-          ./dist/aicooldown-* &
-          app=$!
-          for i in $(seq 60); do curl -sf -o /dev/null http://127.0.0.1:3477/api/local && break; sleep 1; done
-          curl -sf -o /dev/null http://127.0.0.1:3477/
-          curl -sf http://127.0.0.1:3477/api/local
-          kill "$app"
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a ' || '' }}node desktop/smoke.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.os }}
-          path: dist/*
+          path: |
+            dist/aicooldown-*.exe
+            dist/aicooldown-*.dmg
+            dist/aicooldown-*.AppImage
           if-no-files-found: error
 
   release:
@@ -64,20 +61,20 @@ jobs:
         run: |
           sha256sum aicooldown-* > SHA256SUMS.txt
           cat > notes.md <<'EOF'
-          The AI Cooldown dashboard as a program for your own computer, with the **This machine** features the website cannot offer: switch which account the Claude Code and Codex CLIs are logged in with, and say hello on a schedule so a 5-hour window starts before you need it.
+          The AI Cooldown dashboard as an app on your own computer, with the **This machine** features the website cannot offer: switch which account the Claude Code and Codex CLIs are logged in with, and say hello on a schedule so a 5-hour window starts before you need it.
 
           Sign in with your aicooldown.com account to see the same synced accounts as on the website, or stay a guest and keep everything on your computer.
 
-          Download the file for your system and run it. It opens the dashboard at http://localhost:3477 and keeps running while its window is open.
+          | System | File | |
+          | --- | --- | --- |
+          | Windows | `aicooldown-windows-x64.exe` | Installer: run it, and AI Cooldown opens and gets a Start menu entry. |
+          | macOS, Apple Silicon | `aicooldown-macos-arm64.dmg` | Open it and drag AI Cooldown to Applications. |
+          | macOS, Intel | `aicooldown-macos-x64.dmg` | Open it and drag AI Cooldown to Applications. |
+          | Linux | `aicooldown-linux-x64.AppImage` | `chmod +x` it, then run it. |
 
-          | System | File |
-          | --- | --- |
-          | Windows | `aicooldown-windows-x64.exe` |
-          | macOS, Apple Silicon | `aicooldown-macos-arm64` |
-          | macOS, Intel | `aicooldown-macos-x64` |
-          | Linux | `aicooldown-linux-x64` |
+          Closing the window keeps AI Cooldown running in the tray (the Dock on macOS), so scheduled hellos keep going and you get a system notification when a limit resets, crosses 90% or runs out. Once installed it also opens at login, straight to the tray; turn that off with **Open at login** in the tray icon's menu. Quit from the same menu.
 
-          The files are not code-signed. On Windows, SmartScreen may say it protected your PC: click **More info**, then **Run anyway**. On macOS and Linux, run `chmod +x` on the file first, and on macOS also `xattr -d com.apple.quarantine` on it.
+          The files are not code-signed. On Windows, SmartScreen may say it protected your PC: click **More info**, then **Run anyway**. On macOS, after copying the app to Applications, run `xattr -dr com.apple.quarantine "/Applications/AI Cooldown.app"` once, or allow it in System Settings, Privacy & Security.
 
           Built by GitHub Actions from this tag's source. `SHA256SUMS.txt` has the checksum of each file. More in the [README](https://github.com/${{ github.repository }}#desktop-app).
           EOF

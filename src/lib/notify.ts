@@ -1,11 +1,15 @@
+import { desktopApp } from "./desktop";
 import { formatCountdown } from "./format";
 import type { Account, Usage } from "./types";
 
 const KEY = "ai-usage-tracker:notify";
 
+/** In a browser, once asked for and allowed; in the desktop app, which needs no permission, unless turned off. */
 export function notifyEnabled(): boolean {
   try {
-    return localStorage.getItem(KEY) === "1" && typeof Notification !== "undefined" && Notification.permission === "granted";
+    const choice = localStorage.getItem(KEY);
+    if (desktopApp()) return choice !== "0";
+    return choice === "1" && typeof Notification !== "undefined" && Notification.permission === "granted";
   } catch {
     return false;
   }
@@ -22,6 +26,7 @@ export function setNotifyEnabled(on: boolean): void {
 export type PermissionResult = "granted" | "denied" | "unsupported";
 
 export async function requestNotifyPermission(): Promise<PermissionResult> {
+  if (desktopApp()) return "granted";
   if (typeof Notification === "undefined") return "unsupported";
   if (Notification.permission === "granted") return "granted";
   if (Notification.permission === "denied") return "denied";
@@ -30,6 +35,8 @@ export async function requestNotifyPermission(): Promise<PermissionResult> {
 }
 
 function send(title: string, body: string, tag: string): void {
+  const desktop = desktopApp();
+  if (desktop) return desktop.notify(title, body, tag);
   try {
     new Notification(title, { body, tag, icon: "/icon.png" });
   } catch {

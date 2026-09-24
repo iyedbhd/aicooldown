@@ -1,0 +1,9 @@
+{
+  "name": "aicooldown-desktop",
+  "private": true,
+  "description": "Packaging for the AI Cooldown desktop app, run by `npm run desktop` from the repository root. Kept apart so the website's install never downloads Electron.",
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3"
+  }
+}

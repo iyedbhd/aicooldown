@@ -11,7 +11,8 @@
  *   src/app/favicon.ico       16, 32 and 48px, for browsers and crawlers that ask for /favicon.ico
  *   src/app/icon.png          192px, a multiple of 48px as Google's favicon guidelines ask
  *   src/app/apple-icon.png    180px and square: iOS rounds the corners itself
- *   desktop/icon.ico          the Windows executable's icon, 16 to 256px
+ *   desktop/icon.ico          the desktop app's icon on Windows, 16 to 256px
+ *   desktop/icon.png          the desktop app's icon on macOS and Linux, 1024px
  *
  * Needs Node 22.18 or later, which runs the TypeScript import as it is.
  */
@@ -94,6 +95,7 @@ const files = {
   "src/app/icon.png": await png(192),
   "src/app/apple-icon.png": await png(180, { bleed: true }),
   "desktop/icon.ico": await ico([16, 20, 24, 32, 40, 48, 64, 96, 128, 256]),
+  "desktop/icon.png": await png(1024),
 };
 for (const [file, content] of Object.entries(files)) {
   fs.writeFileSync(path.join(ROOT, file), content);

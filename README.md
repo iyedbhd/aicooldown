@@ -97,30 +97,32 @@ If you would rather not have your tokens pass through someone else's server at a
 
 The website can only read your limits. On your own computer, AI Cooldown can also work with the Claude Code and Codex CLIs installed there: switch which account each one is logged in with, and say hello on a schedule so a 5-hour window starts before you need it. That is the [This machine](#this-machine-switch-cli-logins-and-start-the-5-hour-clock-early) section.
 
-The easiest way to get it is the desktop app: one file, no Node.js, no setup. Download the one for your system from the [latest release](https://github.com/iyedbhd/aicooldown/releases/latest) and run it. It opens the dashboard at http://localhost:3477 and keeps running while its window is open (scheduled hellos only fire while it runs).
+The easiest way to get it is the desktop app: the dashboard in its own window, with its own icon, no browser and no setup. Download the installer for your system from the [latest release](https://github.com/iyedbhd/aicooldown/releases/latest).
 
-| System | File |
-| --- | --- |
-| Windows | `aicooldown-windows-x64.exe` |
-| macOS, Apple Silicon | `aicooldown-macos-arm64` |
-| macOS, Intel | `aicooldown-macos-x64` |
-| Linux | `aicooldown-linux-x64` |
+| System | File | |
+| --- | --- | --- |
+| Windows | `aicooldown-windows-x64.exe` | Run it: AI Cooldown installs for your user, gets a Start menu entry and opens. |
+| macOS, Apple Silicon | `aicooldown-macos-arm64.dmg` | Open it and drag AI Cooldown to Applications. |
+| macOS, Intel | `aicooldown-macos-x64.dmg` | Open it and drag AI Cooldown to Applications. |
+| Linux | `aicooldown-linux-x64.AppImage` | `chmod +x` it, then run it. If it asks for FUSE, install `libfuse2` or run it with `--appimage-extract-and-run`. |
 
-The files are not code-signed, so the first start needs a nod from you. On Windows, SmartScreen may say it protected your PC: click **More info**, then **Run anyway**. On macOS and Linux, in a terminal:
+- **It lives in the tray.** Closing the window keeps AI Cooldown running in the tray (the Dock on macOS), so scheduled hellos and notifications keep going, and the tray icon's tooltip counts down to the next reset. Starting it again brings the window back; quit from the tray icon's menu.
+- **Notifications are on.** When a limit resets, crosses 90% or runs out, you get a system notification, even with the window closed; clicking it opens the window. The bell button in the header turns them off.
+- **It opens at login,** straight to the tray, once installed. Turn that off with **Open at login** in the tray icon's menu (the AI Cooldown menu on macOS).
+
+The files are not code-signed, so the first start needs a nod from you. On Windows, SmartScreen may say it protected your PC: click **More info**, then **Run anyway**. On macOS, after dragging the app to Applications, allow it once in System Settings, Privacy & Security, or run:
 
 ```bash
-chmod +x aicooldown-macos-arm64
-xattr -d com.apple.quarantine aicooldown-macos-arm64   # macOS only
-./aicooldown-macos-arm64
+xattr -dr com.apple.quarantine "/Applications/AI Cooldown.app"
 ```
 
-- **Nothing private is baked in.** Releases are built by GitHub Actions from the tagged source, starting from a clean copy of the repository, and the build refuses to finish if anything private shows up in it: an `.env` value, a database, a saved login, anything shaped like a token or key. The key that encrypts tokens in the local database is generated on your machine the first time it runs. Check a download against `SHA256SUMS.txt` on the release.
-- **Only your computer can reach it.** The server listens on `127.0.0.1` alone.
+- **Nothing private is baked in.** Releases are built by GitHub Actions from the tagged source, starting from a clean copy of the repository, and the build refuses to finish if anything private shows up in what the app ships: an `.env` value, a database, a saved login, anything shaped like a token or key. The key that encrypts tokens in the local database is generated on your machine the first time it runs. Check a download against `SHA256SUMS.txt` on the release.
+- **Only your computer can reach it.** Inside, the app runs the dashboard's server on `127.0.0.1` alone, and its window shows only that dashboard: links to other sites open in your browser.
 - **Your AI Cooldown account works there too.** Signing in uses your account on aicooldown.com, so the accounts you synced on the website show up in the desktop app. The app passes sign-in, synced accounts and their usage on to aicooldown.com, with only its own session cookie. As a guest, everything stays on your computer and the app talks to Claude and OpenAI directly. Set `AICOOLDOWN_ACCOUNTS_SERVER` to the `https://` address of your own copy to use that instead, or to `local` to keep accounts in a database on your computer.
-- **Your data is in one folder:** `%LOCALAPPDATA%\AI Cooldown` on Windows, `~/Library/Application Support/AI Cooldown` on macOS, `~/.local/share/aicooldown` on Linux. `data` holds the saved CLI logins, schedules, the local database and its key; `apps` is the unpacked program, replaced by each new version.
-- **Port 3477 taken?** Set `AICOOLDOWN_PORT`. Accounts you add as a guest are kept by the browser per address, so stick to one port.
+- **Your data is in one folder:** `%LOCALAPPDATA%\AI Cooldown` on Windows, `~/Library/Application Support/AI Cooldown` on macOS, `~/.local/share/aicooldown` on Linux. `data` holds the saved CLI logins, schedules, the local database and its key; `window` holds the window's own storage: guest accounts, polling history and theme. Guest accounts you added in a browser tab with the single-file versions before 0.3 stayed in that browser, so add them again or sign in.
+- **Port 3477 taken?** Set `AICOOLDOWN_PORT`. The window's storage is kept per address, so stick to one port.
 
-`npm run desktop` builds the file for the system you run it on into `dist/`. Pushing a `v*` tag that matches the version in `package.json` builds all four and publishes the release.
+`npm run desktop` builds the installer for the system you run it on into `dist/`, with Electron and electron-builder pinned in `desktop/package.json`. Pushing a `v*` tag that matches the version in `package.json` builds all four and publishes the release.
 
 ## Run it yourself
 
@@ -182,7 +184,7 @@ src/lib/server/{db,auth,accounts,crypto}.ts
                              libSQL schema, sessions, encrypted account storage
 src/lib/store.ts             browser-side account store: localStorage or the API
 src/components/*             dashboard UI
-desktop/                     the desktop app: its build script and the launcher inside the executable
+desktop/                     the desktop app: its Electron main process, build script and installer smoke test
 ```
 
 Built with Next.js 16, React 19, Tailwind 4 and libSQL. The name, tagline and domain live in `src/lib/site.ts`. The logo is drawn in `src/lib/brand.ts`: `npm run brand` writes every logo file from it (`public/`, the favicons in `src/app/`, the desktop app's icon), and the `/brand` page shows them with the color tokens.

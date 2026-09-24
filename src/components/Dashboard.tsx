@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { postJson } from "@/lib/api";
+import { desktopApp } from "@/lib/desktop";
 import { formatAgo, formatCountdown, formatDateTime, formatPlan } from "@/lib/format";
 import { dropHistory, loadHistory, recordSamples, type History } from "@/lib/history";
 import { notifyChanges, notifyEnabled, requestNotifyPermission, setNotifyEnabled } from "@/lib/notify";
@@ -46,6 +47,8 @@ export function Dashboard() {
   const [showAuth, setShowAuth] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
   const [notify, setNotify] = useState(false);
+  /** In the desktop app's window rather than a browser tab: set after hydration, like everything read from the window. */
+  const [desktop, setDesktop] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [importOffer, setImportOffer] = useState<Account[] | null>(null);
@@ -166,6 +169,7 @@ export function Dashboard() {
     notifyRef.current = notifyEnabled();
     setHistory(historyRef.current);
     setNotify(notifyRef.current);
+    setDesktop(Boolean(desktopApp()));
     void (async () => {
       const u = await fetchSession();
       setUser(u);
@@ -208,7 +212,7 @@ export function Dashboard() {
       saveAccounts([]);
       setAccountList([...accountsRef.current, ...created]);
       for (const a of created) void refreshOne(a);
-      flash(`Moved ${created.length} account${created.length === 1 ? "" : "s"} to your ${SITE.name} account and cleared them from this browser.`);
+      flash(`Moved ${created.length} account${created.length === 1 ? "" : "s"} to your ${SITE.name} account and cleared them from this ${desktop ? "app" : "browser"}.`);
     } catch (err) {
       flash(err instanceof Error ? err.message : "Import failed.");
     }
@@ -266,7 +270,7 @@ export function Dashboard() {
     notifyRef.current = true;
     setNotifyEnabled(true);
     setNotify(true);
-    flash("Notifications on: resets, 90% crossings and exhaustion, while this tab is open.");
+    flash(`Notifications on: resets, 90% crossings and exhaustion, ${desktop ? "even while AI Cooldown sits in the tray" : "while this tab is open"}.`);
   }
 
   async function copyStatus() {
@@ -346,7 +350,7 @@ export function Dashboard() {
               Star us on GitHub
             </a>
             <ThemeToggle className={btn} />
-            <button type="button" onClick={() => void toggleNotify()} disabled={accounts.length === 0} aria-pressed={notify} title="Browser notification when a limit resets, crosses 90% or runs out" className={`${btn} ${notify ? "btn-accent" : ""}`}>
+            <button type="button" onClick={() => void toggleNotify()} disabled={accounts.length === 0} aria-pressed={notify} title="Notification when a limit resets, crosses 90% or runs out" className={`${btn} ${notify ? "btn-accent" : ""}`}>
               <Icon name={notify ? "bell" : "bellOff"} />
               {notify ? "Notifying" : "Notify me"}
             </button>
@@ -366,7 +370,7 @@ export function Dashboard() {
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 font-mono text-[11px] text-faint">
           <span>
-            {store.mode === "remote" ? "accounts synced to your AI Cooldown account · tokens stay on the server" : "guest mode · accounts and tokens stay in this browser"}
+            {store.mode === "remote" ? "accounts synced to your AI Cooldown account · tokens stay on the server" : `guest mode · accounts and tokens stay in this ${desktop ? "app" : "browser"}`}
           </span>
           <span className="flex items-center gap-2 tabular-nums" suppressHydrationWarning>
             {accounts.length > 0 && <span className={`h-1.5 w-1.5 rounded-full ${anyLoading ? "live bg-accent" : "bg-emerald-500"}`} aria-hidden />}
@@ -409,7 +413,7 @@ export function Dashboard() {
           <p className="mx-auto mt-2 max-w-md text-sm text-muted">
             You get every session, weekly and per-model limit (Fable included), when each resets, which account to use next, and
             whether your current pace runs out before the reset.{" "}
-            {user ? "Accounts are stored on the server and follow you across devices." : "Without signing in, everything stays in this browser."}
+            {user ? "Accounts are stored on the server and follow you across devices." : `Without signing in, everything stays in this ${desktop ? "app" : "browser"}.`}
           </p>
           <div className="mt-6 flex justify-center gap-2">
             <button type="button" onClick={() => setShowAdd(true)} className={btnPrimary}>

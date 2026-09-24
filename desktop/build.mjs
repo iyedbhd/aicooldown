@@ -1,14 +1,14 @@
 /**
- * Builds the AI Cooldown desktop executable for the platform it runs on:
+ * Builds the AI Cooldown desktop app for the platform it runs on:
  *
- *   npm run desktop  ->  dist/aicooldown-<os>-<arch>[.exe]
+ *   npm run desktop  ->  dist/aicooldown-<os>-<arch>.<exe|dmg|AppImage>
  *
  * The app is built from a fresh copy of the files git tracks, so nothing
- * gitignored (.env files, ./data, personal and editor files) can reach the
- * executable, and the result is checked for private data before it is packed.
- * The standalone Next.js server is then packed into a copy of this Node binary
- * as a single executable application, started by desktop/launcher.js. On
- * Windows it also takes the app's icon (desktop/icon.ico, from npm run brand).
+ * gitignored (.env files, ./data, personal and editor files) can reach it,
+ * and what it ships is checked for private data before it is packed and again
+ * as packed. The Next.js standalone server runs inside Electron (main.mjs),
+ * which shows it in the app's own window; electron-builder, pinned in
+ * desktop/package.json, makes the installer.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -16,15 +16,16 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { gzipSync } from "node:zlib";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
+const DIST = path.join(ROOT, "dist");
 const OS_NAME = { win32: "windows", darwin: "macos", linux: "linux" }[process.platform] ?? process.platform;
-const OUT = path.join(ROOT, "dist", `aicooldown-${OS_NAME}-${process.arch}${process.platform === "win32" ? ".exe" : ""}`);
+const TARGET = { win32: ["win", "nsis", "exe"], darwin: ["mac", "dmg", "dmg"], linux: ["linux", "AppImage", "AppImage"] }[process.platform];
+const NAME = `aicooldown-${OS_NAME}-${process.arch}`;
 
-/** The only entries a standalone server needs; anything else beside them was copied in by mistake. */
+/** What each packed folder may hold at its top level; anything else was copied in by mistake. */
 const SERVER_ENTRIES = new Set(["server.js", "package.json", ".next", "node_modules", "public"]);
+const APP_ENTRIES = new Set(["main.mjs", "preload.cjs", "package.json", "icon.ico", "icon.png"]);
 /** Files that only ever hold local state or secrets. */
 const PRIVATE_FILE = /(^|\/)(\.env[^/]*|\.git|\.vercel|cli-profiles|\.credentials\.json|local-schedules\.json|app-secret|[^/]+\.(db|sqlite3?|pem|key))(\/|$)/;
 /**
@@ -45,16 +46,16 @@ const isInside = (parent, child) => {
 };
 
 /**
- * The files to pack, as [path in the app, file on disk]. A link is packed as
- * a copy of what it points to: on Windows, Next writes junctions into the
+ * The files under dir, as [path under dir, file on disk]. A link counts as a
+ * copy of what it points to: on Windows, Next writes junctions into the
  * build's own node_modules, which would not exist on the user's machine.
  */
-function appFiles(app, buildDir) {
+function filesUnder(dir, buildDir) {
   const files = [];
-  const walk = (dir, prefix) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  const walk = (current, prefix) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const name = prefix + entry.name;
-      let source = path.join(dir, entry.name);
+      let source = path.join(current, entry.name);
       if (entry.isSymbolicLink()) {
         source = fs.realpathSync.native(source);
         if (!isInside(buildDir, source)) throw new Error(`${name} links outside the build, to ${source}`);
@@ -63,11 +64,11 @@ function appFiles(app, buildDir) {
       else files.push([name, source]);
     }
   };
-  walk(app, "");
+  walk(dir, "");
   return files.sort(([a], [b]) => (a < b ? -1 : 1));
 }
 
-/** Values from this checkout's .env files, which must never show up in the build. */
+/** Values from this checkout's .env files, which must never show up in the app. */
 function localSecrets() {
   const secrets = [];
   for (const name of fs.readdirSync(ROOT).filter((n) => n.startsWith(".env"))) {
@@ -80,55 +81,26 @@ function localSecrets() {
   return secrets;
 }
 
-/** Throws if anything private made it into the files about to be packed. */
-function checkForLeaks(names, contents) {
-  const secrets = localSecrets();
+/** Throws if anything private is in these files; `allowed`, when given, is every top-level entry they may have. */
+function checkForLeaks(files, secrets, allowed) {
   const problems = [];
-  names.forEach((name, i) => {
-    if (!SERVER_ENTRIES.has(name.split("/")[0])) problems.push(`${name}: not part of the server`);
+  for (const [name, source] of files) {
+    if (allowed && !allowed.has(name.split("/")[0])) problems.push(`${name}: not part of the app`);
     if (PRIVATE_FILE.test(name)) problems.push(`${name}: private file`);
-    const text = contents[i].toString("latin1");
+    const text = fs.readFileSync(source).toString("latin1");
     const credential = CREDENTIAL.exec(text);
     if (credential) problems.push(`${name}: looks like it holds a credential (${credential[0].slice(0, 10)}...)`);
     for (const [key, value] of secrets) if (text.includes(value)) problems.push(`${name}: contains ${key}`);
-  });
-  if (problems.length) throw new Error(`Refusing to pack: private data in the build.\n  ${problems.join("\n  ")}`);
-  return secrets.length;
+  }
+  if (problems.length) throw new Error(`Refusing to pack: private data in the app.\n  ${problems.join("\n  ")}`);
 }
 
-/**
- * Swaps node.exe's icon and name in the Windows executable for the app's, so
- * Explorer shows the AI Cooldown icon and Task Manager says "AI Cooldown"
- * rather than "Node.js JavaScript Runtime". Runs after postject: resizing the
- * resources can move the sections behind them, which postject's PE parser
- * misreads, and once the blob is in, the resources are the file's last section.
- */
-async function brandWindowsExe(repoRequire, repo, version) {
-  const { Data, NtExecutable, NtExecutableResource, Resource } = await import(pathToFileURL(repoRequire.resolve("resedit")).href);
-  const exe = NtExecutable.from(fs.readFileSync(OUT), { ignoreCert: true });
-  const res = NtExecutableResource.from(exe);
-  const icons = Data.IconFile.from(fs.readFileSync(path.join(repo, "desktop", "icon.ico"))).icons.map((icon) => icon.data);
-  for (const group of Resource.IconGroupEntry.fromEntries(res.entries)) Resource.IconGroupEntry.replaceIconsForResource(res.entries, group.id, group.lang, icons);
-
-  const [info] = Resource.VersionInfo.fromEntries(res.entries);
-  const [major, minor, patch] = version.split(/[.-]/, 3).map(Number);
-  info.setFileVersion(major, minor, patch);
-  info.setProductVersion(major, minor, patch);
-  for (const lang of info.getAllLanguagesForStringValues()) {
-    info.setStringValues(lang, {
-      ProductName: "AI Cooldown",
-      FileDescription: "AI Cooldown",
-      CompanyName: "AI Cooldown",
-      InternalName: "aicooldown",
-      OriginalFilename: path.basename(OUT),
-      FileVersion: version,
-      ProductVersion: version,
-      LegalCopyright: "MIT license. Includes Node.js, copyright Node.js contributors, MIT license.",
-    });
+/** Copies the files to dir, links resolved. */
+function stage(files, dir) {
+  for (const [name, source] of files) {
+    fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+    fs.copyFileSync(source, path.join(dir, name));
   }
-  info.outputToResourceEntries(res.entries);
-  res.outputResource(exe);
-  fs.writeFileSync(OUT, Buffer.from(exe.generate()));
 }
 
 async function build(work) {
@@ -145,55 +117,73 @@ async function build(work) {
     AICOOLDOWN_DESKTOP: "1",
     NEXT_TELEMETRY_DISABLED: "1",
   });
-  const app = path.join(repo, ".next", "standalone");
-  if (!fs.existsSync(path.join(app, "server.js"))) throw new Error("next build did not write .next/standalone/server.js");
-  fs.cpSync(path.join(repo, ".next", "static"), path.join(app, ".next", "static"), { recursive: true });
-  fs.cpSync(path.join(repo, "public"), path.join(app, "public"), { recursive: true });
+  const standalone = path.join(repo, ".next", "standalone");
+  if (!fs.existsSync(path.join(standalone, "server.js"))) throw new Error("next build did not write .next/standalone/server.js");
+  fs.cpSync(path.join(repo, ".next", "static"), path.join(standalone, ".next", "static"), { recursive: true });
+  fs.cpSync(path.join(repo, "public"), path.join(standalone, "public"), { recursive: true });
 
-  const files = appFiles(app, work);
-  const names = files.map(([name]) => name);
-  const contents = files.map(([, source]) => fs.readFileSync(source));
-  const secretCount = checkForLeaks(names, contents);
-
-  // Payload: gzip of [u32 header length][JSON [[path, size], ...]][file bytes in that order].
-  const header = Buffer.from(JSON.stringify(names.map((name, i) => [name, contents[i].length])));
-  const headerLength = Buffer.alloc(4);
-  headerLength.writeUInt32LE(header.length);
-  const payload = gzipSync(Buffer.concat([headerLength, header, ...contents]), { level: 9 });
+  // The server, shipped next to the app as resources/server, and the app: the main process, its icons, and the name and version it reports.
   const { version } = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8"));
-  const id = `${version}-${createHash("sha256").update(payload).digest("hex").slice(0, 12)}`;
-  fs.writeFileSync(path.join(work, "app.gz"), payload);
-  fs.writeFileSync(path.join(work, "meta.json"), JSON.stringify({ version, id }));
-  // Relative to work: the blob keeps the entry script's path as written here.
+  const server = path.join(work, "server");
+  const app = path.join(work, "app");
+  stage(filesUnder(standalone, work), server);
+  stage(["main.mjs", "preload.cjs", "icon.ico", "icon.png"].map((file) => [file, path.join(repo, "desktop", file)]), app);
   fs.writeFileSync(
-    path.join(work, "sea-config.json"),
-    JSON.stringify({
-      main: "repo/desktop/launcher.js",
-      output: "sea.blob",
-      disableExperimentalSEAWarning: true,
-      assets: { app: "app.gz", meta: "meta.json" },
-    }),
+    path.join(app, "package.json"),
+    JSON.stringify({ name: "aicooldown", productName: "AI Cooldown", version, description: "Know when your AI limits come back", main: "main.mjs", license: "MIT" }),
   );
-  run(process.execPath, ["--experimental-sea-config", "sea-config.json"], work);
+  const secrets = localSecrets();
+  const serverFiles = filesUnder(server, work);
+  checkForLeaks(serverFiles, secrets, SERVER_ENTRIES);
+  checkForLeaks(filesUnder(app, work), secrets, APP_ENTRIES);
 
-  fs.mkdirSync(path.dirname(OUT), { recursive: true });
-  fs.copyFileSync(process.execPath, OUT);
-  fs.chmodSync(OUT, 0o755);
-  if (process.platform === "darwin") run("codesign", ["--remove-signature", OUT], work);
-  // On Windows this drops node.exe's signature (postject warns it "seems corrupted"): the result is plainly unsigned.
-  const repoRequire = createRequire(path.join(repo, "package.json"));
-  const { inject } = repoRequire("postject");
-  await inject(OUT, "NODE_SEA_BLOB", fs.readFileSync(path.join(work, "sea.blob")), {
-    sentinelFuse: "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2",
-    machoSegmentName: process.platform === "darwin" ? "NODE_SEA" : undefined,
+  // electron-builder downloads the Electron release it packs; the npm package is only where its version is pinned.
+  const desktop = path.join(repo, "desktop");
+  run("npm", ["ci", "--no-audit", "--no-fund"], desktop, { ELECTRON_SKIP_BINARY_DOWNLOAD: "1" });
+  const desktopRequire = createRequire(path.join(desktop, "package.json"));
+  const [platform, target, ext] = TARGET;
+  fs.rmSync(DIST, { recursive: true, force: true });
+  await desktopRequire("electron-builder").build({
+    projectDir: app,
+    publish: "never",
+    [platform]: [target],
+    [process.arch]: true,
+    config: {
+      appId: "com.aicooldown.app",
+      productName: "AI Cooldown",
+      copyright: "MIT license",
+      electronVersion: desktopRequire("electron/package.json").version,
+      npmRebuild: false,
+      directories: { output: DIST },
+      artifactName: `${NAME}.\${ext}`,
+      // Copied in here, before signing and the installer, rather than as extraResources, which leave out a top-level node_modules.
+      afterPack: async ({ appOutDir, electronPlatformName, packager }) => {
+        const resources =
+          electronPlatformName === "darwin" ? path.join(appOutDir, `${packager.appInfo.productFilename}.app`, "Contents", "Resources") : path.join(appOutDir, "resources");
+        fs.cpSync(server, path.join(resources, "server"), { recursive: true });
+      },
+      win: { icon: path.join(app, "icon.ico") },
+      // installer.nsh removes the "open at login" entry on uninstall.
+      nsis: { oneClick: true, perMachine: false, differentialPackage: false, include: path.join(desktop, "installer.nsh") },
+      // Ad hoc: Apple Silicon runs no unsigned code, and there is no Developer ID. Hardened runtime would reject Electron's own signed frameworks then.
+      mac: { icon: path.join(app, "icon.png"), identity: "-", hardenedRuntime: false, category: "public.app-category.developer-tools" },
+      dmg: { writeUpdateInfo: false },
+      linux: { icon: path.join(app, "icon.png"), category: "Development", executableName: "aicooldown" },
+    },
   });
-  if (process.platform === "win32") await brandWindowsExe(repoRequire, repo, version);
-  // Apple Silicon only runs signed code; an ad-hoc signature is enough.
-  if (process.platform === "darwin") run("codesign", ["--sign", "-", OUT], work);
 
-  const sha256 = createHash("sha256").update(fs.readFileSync(OUT)).digest("hex");
-  console.log(`\n${path.relative(ROOT, OUT)}  ${(fs.statSync(OUT).size / 2 ** 20).toFixed(1)} MB  sha256 ${sha256}`);
-  console.log(`${files.length} files checked against ${secretCount} local .env values and credential patterns: nothing private.`);
+  // What the installer unpacks, checked the same way: the app archive and the server beside it, all of it.
+  const unpacked = fs.readdirSync(DIST).find((entry) => /-unpacked$|^mac/.test(entry) && fs.statSync(path.join(DIST, entry)).isDirectory());
+  const resources = unpacked && (platform === "mac" ? path.join(DIST, unpacked, "AI Cooldown.app", "Contents", "Resources") : path.join(DIST, unpacked, "resources"));
+  const packedServer = resources && fs.existsSync(path.join(resources, "server")) ? filesUnder(path.join(resources, "server"), DIST) : [];
+  if (packedServer.length !== serverFiles.length) throw new Error(`The packed app has ${packedServer.length} of the server's ${serverFiles.length} files.`);
+  const packed = filesUnder(resources, DIST);
+  checkForLeaks(packed, secrets);
+
+  const out = path.join(DIST, `${NAME}.${ext}`);
+  const sha256 = createHash("sha256").update(fs.readFileSync(out)).digest("hex");
+  console.log(`\n${path.relative(ROOT, out)}  ${(fs.statSync(out).size / 2 ** 20).toFixed(1)} MB  sha256 ${sha256}`);
+  console.log(`${serverFiles.length} server files and ${packed.length} packed files checked against ${secrets.length} local .env values and credential patterns: nothing private.`);
 }
 
 // Canonical, like the link targets it is compared with (macOS's temp folder is behind a symlink).

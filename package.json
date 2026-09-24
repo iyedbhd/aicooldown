@@ -1,6 +1,6 @@
 {
   "name": "aicooldown",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -23,8 +23,6 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
-    "postject": "1.0.0-alpha.6",
-    "resedit": "3.1.0",
     "sharp": "^0.35.4",
     "tailwindcss": "^4",
     "typescript": "^5"
