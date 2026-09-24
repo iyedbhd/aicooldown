@@ -1,5 +1,7 @@
-# Builds the desktop app's installers. A pushed v* tag also publishes them as
-# a GitHub release; running it by hand only leaves them as workflow artifacts.
+# Builds the desktop app's installers and checks that an installed copy
+# updates itself. A pushed v* tag also publishes them as a GitHub release, with
+# the latest*.yml files installed copies update from; running it by hand only
+# leaves them as workflow artifacts.
 name: Desktop app
 
 on:
@@ -41,11 +43,33 @@ jobs:
             dist/aicooldown-*.exe
             dist/aicooldown-*.dmg
             dist/aicooldown-*.AppImage
+            dist/latest*.yml
           if-no-files-found: error
+
+  # An installed copy of this build, offered a newer one, has to download it, install it and come back up.
+  update-test:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-latest
+          path: older
+      - name: Build a newer version to update to
+        shell: bash
+        run: npm version 99.0.0 --no-git-tag-version && npm run desktop
+      - name: Install this build and let it update itself
+        run: node desktop/update-test.mjs older/aicooldown-windows-x64.exe dist
 
   release:
     if: github.ref_type == 'tag'
-    needs: build
+    needs: [build, update-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -74,8 +98,10 @@ jobs:
 
           Closing the window keeps AI Cooldown running in the tray (the Dock on macOS), so scheduled hellos keep going and you get a system notification when a limit resets, crosses 90% or runs out. Once installed it also opens at login, straight to the tray; turn that off with **Open at login** in the tray icon's menu. Quit from the same menu.
 
+          Installed on Windows or Linux, it keeps itself up to date: a new version downloads in the background and installs the next time the window is closed. On macOS you get a notification when a new version is out.
+
           The files are not code-signed. On Windows, SmartScreen may say it protected your PC: click **More info**, then **Run anyway**. On macOS, after copying the app to Applications, run `xattr -dr com.apple.quarantine "/Applications/AI Cooldown.app"` once, or allow it in System Settings, Privacy & Security.
 
           Built by GitHub Actions from this tag's source. `SHA256SUMS.txt` has the checksum of each file. More in the [README](https://github.com/${{ github.repository }}#desktop-app).
           EOF
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "AI Cooldown $GITHUB_REF_NAME" --notes-file notes.md aicooldown-* SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "AI Cooldown $GITHUB_REF_NAME" --notes-file notes.md aicooldown-* latest.yml latest-linux.yml SHA256SUMS.txt

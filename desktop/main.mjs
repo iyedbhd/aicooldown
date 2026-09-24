@@ -4,7 +4,8 @@
  * the dashboard in the app's own window. Closing the window leaves the app in
  * the tray (in the Dock on macOS), where the dashboard keeps polling: scheduled
  * hellos and limit notifications keep working, and the tray icon's tooltip
- * shows the next reset. Installed, it opens at login, straight to the tray.
+ * shows the next reset. Installed, it opens at login, straight to the tray,
+ * and keeps itself up to date from the GitHub releases.
  *
  * desktop/build.mjs packs it with the Next.js standalone server alongside, in
  * resources/server.
@@ -16,6 +17,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, session, shell, Tray } from "electron";
+import electronUpdater from "electron-updater";
 
 /** Fixed, so the window's origin, and with it the accounts and history its storage holds, stays the same between runs. */
 const PORT = Number(process.env.AICOOLDOWN_PORT) || 3477;
@@ -24,6 +26,9 @@ const ADDRESS = `http://127.0.0.1:${PORT}`;
 const ACCOUNTS = process.env.AICOOLDOWN_ACCOUNTS_SERVER || "https://aicooldown.com";
 /** The installer gives its shortcut the same id; Windows shows notifications only for an app it can name. */
 const APP_ID = "com.aicooldown.app";
+/** Where new versions are published; installed copies read the same from resources/app-update.yml. */
+const RELEASES = "https://github.com/iyedbhd/aicooldown/releases";
+const UPDATE_CHECK_MS = 6 * 3600_000;
 /** --bg in globals.css, so the window never flashes white while the page loads. */
 const BACKGROUND = { dark: "#0b0c0f", light: "#f4f5f8" };
 /** Where main.mjs sits, with preload.cjs and the icons. */
@@ -98,7 +103,7 @@ async function startServer(home) {
   }
 }
 
-// ---- Settings: whether to open at login, the one thing the app decides rather than the dashboard.
+// ---- Settings: what the app decides rather than the dashboard, kept with the window's storage.
 
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
 
@@ -110,7 +115,9 @@ function readSettings() {
   }
 }
 
-/** Installed the way people install it, not run from a build folder: only such a copy opens at login. */
+const writeSettings = (changes) => fs.writeFileSync(settingsFile(), JSON.stringify({ ...readSettings(), ...changes }));
+
+/** Installed the way people install it, not run from a build folder: only such a copy opens at login and updates itself. */
 function installed() {
   if (process.platform === "win32") return fs.existsSync(path.join(path.dirname(process.execPath), "Uninstall AI Cooldown.exe"));
   if (process.platform === "darwin") return app.isInApplicationsFolder();
@@ -131,12 +138,12 @@ function applyOpenAtLogin(on) {
 }
 
 function setOpenAtLogin(on) {
-  fs.writeFileSync(settingsFile(), JSON.stringify({ ...readSettings(), openAtLogin: on }));
+  writeSettings({ openAtLogin: on });
   applyOpenAtLogin(on);
   setMenus();
 }
 
-// ---- Window, tray and menus.
+// ---- Window, tray, menus and notifications.
 
 let win = null;
 let tray = null;
@@ -187,6 +194,8 @@ function createWindow(visible) {
     if (quitting) return;
     event.preventDefault();
     win.hide();
+    // Out of sight is the moment to restart into a downloaded update.
+    if (update.state === "ready") return installUpdate();
     if (tray && !toldAboutTray && process.platform === "win32") {
       toldAboutTray = true;
       tray.displayBalloon({ title: "AI Cooldown is still running", content: "Scheduled hellos and notifications keep going. Quit from this icon's menu.", iconType: "info" });
@@ -203,27 +212,49 @@ function showWindow() {
   win.focus();
 }
 
+/** By tag, so a newer notification replaces an older one, and held so that a click still reaches us. */
+const notifications = new Map();
+
+function notify(title, body, onClick = showWindow, tag = title) {
+  if (!Notification.isSupported()) return;
+  notifications.get(tag)?.close();
+  const notification = new Notification({ title, body, icon: nativeImage.createFromPath(path.join(HERE, "icon.png")) });
+  notification.on("click", onClick);
+  notification.on("close", () => notifications.get(tag) === notification && notifications.delete(tag));
+  notifications.set(tag, notification);
+  notification.show();
+}
+
+// The dashboard's own notifications, through preload.cjs.
+ipcMain.on("notify", (event, title, body, tag) => {
+  const from = event.senderFrame?.url;
+  if (!from || new URL(from).origin !== ADDRESS) return;
+  notify(String(title).slice(0, 120), String(body).slice(0, 300), showWindow, `page:${String(tag).slice(0, 200)}`);
+});
+
 const openAtLoginItem = (label) => ({ label, type: "checkbox", checked: openAtLogin(), click: (item) => setOpenAtLogin(item.checked) });
 
-/** The tray's menu and the app menu; both show whether it opens at login, so they are rebuilt when that changes. */
+/** The tray's menu and the app menu; they show whether it opens at login and where an update stands, so they are rebuilt when either changes. */
 function setMenus() {
   const view = {
     label: "View",
     submenu: [{ role: "reload" }, { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { role: "togglefullscreen" }],
   };
-  const login = installed() ? [openAtLoginItem(process.platform === "darwin" ? "Open at Login" : "Open at login"), { type: "separator" }] : [];
+  const login = installed() ? [openAtLoginItem(process.platform === "darwin" ? "Open at Login" : "Open at login")] : [];
+  const updates = installed() ? [{ label: `Version ${app.getVersion()}`, enabled: false }, updateItem()] : [];
+  const extras = [...login, ...updates].length ? [...login, ...updates, { type: "separator" }] : [];
   // The Edit menu is what makes copy and paste work on macOS; the bar stays hidden on Windows and Linux until Alt.
   const appMenu =
     process.platform === "darwin"
       ? [
-          { label: app.name, submenu: [{ role: "about" }, { type: "separator" }, ...login, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" }] },
+          { label: app.name, submenu: [{ role: "about" }, { type: "separator" }, ...extras, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" }] },
           { role: "editMenu" },
           view,
           { role: "windowMenu" },
         ]
       : [{ label: "File", submenu: [{ role: "close" }, { label: "Quit AI Cooldown", accelerator: "Ctrl+Q", click: () => app.quit() }] }, { role: "editMenu" }, view];
   Menu.setApplicationMenu(Menu.buildFromTemplate(appMenu));
-  tray?.setContextMenu(Menu.buildFromTemplate([{ label: "Open AI Cooldown", click: showWindow }, { type: "separator" }, ...login, { label: "Quit AI Cooldown", click: () => app.quit() }]));
+  tray?.setContextMenu(Menu.buildFromTemplate([{ label: "Open AI Cooldown", click: showWindow }, { type: "separator" }, ...extras, { label: "Quit AI Cooldown", click: () => app.quit() }]));
 }
 
 function createTray() {
@@ -233,22 +264,101 @@ function createTray() {
   tray.on("click", showWindow);
 }
 
-// ---- Notifications, asked for by the dashboard through preload.cjs.
+// ---- Updates. Windows and Linux download a new release in the background and install it as soon as the window is out
+// of sight, restarting as they were. macOS copies cannot replace themselves without an Apple Developer ID signature, so
+// they say when a new release is out and open its page.
 
-/** By the dashboard's tag, so a newer one replaces an older one, and held so that a click still reaches us. */
-const notifications = new Map();
+/** idle, checking, downloading, ready (downloaded, Windows and Linux) or available (macOS), with the version concerned. */
+let update = { state: "idle" };
+/** Only a check the user asked for reports "up to date" and errors. */
+let checkAsked = false;
 
-ipcMain.on("notify", (event, title, body, tag) => {
-  const from = event.senderFrame?.url;
-  if (!from || new URL(from).origin !== ADDRESS || !Notification.isSupported()) return;
-  const key = String(tag).slice(0, 200);
-  notifications.get(key)?.close();
-  const notification = new Notification({ title: String(title).slice(0, 120), body: String(body).slice(0, 300), icon: nativeImage.createFromPath(path.join(HERE, "icon.png")) });
-  notification.on("click", showWindow);
-  notification.on("close", () => notifications.get(key) === notification && notifications.delete(key));
-  notifications.set(key, notification);
-  notification.show();
-});
+function setUpdate(next) {
+  update = next;
+  setMenus();
+}
+
+function updateItem() {
+  const { state, version } = update;
+  if (state === "ready") return { label: `Restart to update to ${version}`, click: installUpdate };
+  if (state === "available") return { label: `Download AI Cooldown ${version}…`, click: () => openInBrowser(`${RELEASES}/latest`) };
+  if (state === "downloading") return { label: `Downloading ${version}…`, enabled: false };
+  if (state === "checking") return { label: "Checking for updates…", enabled: false };
+  return { label: "Check for updates", click: () => checkForUpdates(true) };
+}
+
+/** Quits, installs and starts again, as it was: hidden if the window was out of sight. */
+function installUpdate() {
+  writeSettings({ hiddenAfterUpdate: !win?.isVisible() });
+  electronUpdater.autoUpdater.quitAndInstall(true, true);
+}
+
+/** Whether version a is newer than b, both x.y.z. */
+function newer(a, b) {
+  const [x, y] = [a, b].map((v) => v.split(".").map(Number));
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return false;
+}
+
+function reportCheck(title, body) {
+  if (checkAsked) notify(title, body, showWindow, "update");
+  checkAsked = false;
+}
+
+async function checkForUpdates(asked = false) {
+  if (update.state !== "idle" && update.state !== "available") return;
+  checkAsked = asked;
+  if (process.platform !== "darwin") {
+    // Errors arrive as the "error" event too.
+    return electronUpdater.autoUpdater.checkForUpdates().catch(() => undefined);
+  }
+  setUpdate({ state: "checking" });
+  try {
+    // The latest release's page, whose address ends in its tag: no GitHub API, no rate limit.
+    const res = await fetch(`${RELEASES}/latest`, { redirect: "manual" });
+    const version = /\/tag\/v?(\d+\.\d+\.\d+)$/.exec(res.headers.get("location") ?? "")?.[1];
+    if (!version) throw new Error(`GitHub answered ${res.status}.`);
+    if (!newer(version, app.getVersion())) {
+      setUpdate({ state: "idle" });
+      return reportCheck("AI Cooldown is up to date", `You have the latest version, ${app.getVersion()}.`);
+    }
+    const known = update.version === version;
+    setUpdate({ state: "available", version });
+    if (!known || checkAsked) notify(`AI Cooldown ${version} is out`, "Click to download it. Then drag it to Applications to replace this version.", () => openInBrowser(`${RELEASES}/latest`), "update");
+    checkAsked = false;
+  } catch (err) {
+    setUpdate({ state: "idle" });
+    reportCheck("Could not check for updates", err instanceof Error ? err.message : String(err));
+  }
+}
+
+function startUpdates() {
+  if (!installed()) return;
+  if (process.platform !== "darwin") {
+    const { autoUpdater } = electronUpdater;
+    autoUpdater.logger = null;
+    autoUpdater.on("checking-for-update", () => setUpdate({ state: "checking" }));
+    autoUpdater.on("update-not-available", () => {
+      setUpdate({ state: "idle" });
+      reportCheck("AI Cooldown is up to date", `You have the latest version, ${app.getVersion()}.`);
+    });
+    autoUpdater.on("update-available", (info) => {
+      checkAsked = false;
+      setUpdate({ state: "downloading", version: info.version });
+    });
+    autoUpdater.on("update-downloaded", (info) => {
+      setUpdate({ state: "ready", version: info.version });
+      if (!win?.isVisible()) return installUpdate();
+      notify(`AI Cooldown ${info.version} is ready`, "It installs when you close the window. Click to restart and update now.", installUpdate, "update");
+    });
+    autoUpdater.on("error", (err) => {
+      setUpdate({ state: "idle" });
+      reportCheck("Could not check for updates", err instanceof Error ? err.message : String(err));
+    });
+  }
+  setTimeout(() => void checkForUpdates(), 10_000);
+  setInterval(() => void checkForUpdates(), UPDATE_CHECK_MS);
+}
 
 // ---- Start.
 
@@ -278,8 +388,15 @@ if (!app.requestSingleInstanceLock()) {
       setMenus();
       // Kept pointing at this copy, so it survives updates and moves.
       if (installed()) applyOpenAtLogin(openAtLogin());
+
+      const { hiddenAfterUpdate, lastVersion } = readSettings();
+      writeSettings({ hiddenAfterUpdate: false, lastVersion: app.getVersion() });
       const atLogin = process.argv.includes(HIDDEN) || (process.platform === "darwin" && app.getLoginItemSettings().wasOpenedAtLogin);
-      createWindow(!atLogin);
+      createWindow(!atLogin && !hiddenAfterUpdate);
+      if (lastVersion && lastVersion !== app.getVersion()) {
+        notify(`AI Cooldown updated to ${app.getVersion()}`, "Click to see what changed.", () => openInBrowser(`${RELEASES}/tag/v${app.getVersion()}`), "update");
+      }
+      startUpdates();
     })
     .catch((err) => {
       dialog.showErrorBox("AI Cooldown could not start", err instanceof Error ? err.message : String(err));

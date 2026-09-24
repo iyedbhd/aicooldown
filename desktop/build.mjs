@@ -8,7 +8,8 @@
  * and what it ships is checked for private data before it is packed and again
  * as packed. The Next.js standalone server runs inside Electron (main.mjs),
  * which shows it in the app's own window; electron-builder, pinned in
- * desktop/package.json, makes the installer.
+ * desktop/package.json, makes the installer, and the update info installed
+ * copies read to update themselves (latest.yml, latest-linux.yml).
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -25,7 +26,8 @@ const NAME = `aicooldown-${OS_NAME}-${process.arch}`;
 
 /** What each packed folder may hold at its top level; anything else was copied in by mistake. */
 const SERVER_ENTRIES = new Set(["server.js", "package.json", ".next", "node_modules", "public"]);
-const APP_ENTRIES = new Set(["main.mjs", "preload.cjs", "package.json", "icon.ico", "icon.png"]);
+/** The app's own files in desktop/; electron-builder adds its production dependencies (electron-updater) and package.json. */
+const APP_FILES = ["main.mjs", "preload.cjs", "icon.ico", "icon.png"];
 /** Files that only ever hold local state or secrets. */
 const PRIVATE_FILE = /(^|\/)(\.env[^/]*|\.git|\.vercel|cli-profiles|\.credentials\.json|local-schedules\.json|app-secret|[^/]+\.(db|sqlite3?|pem|key))(\/|$)/;
 /**
@@ -122,30 +124,23 @@ async function build(work) {
   fs.cpSync(path.join(repo, ".next", "static"), path.join(standalone, ".next", "static"), { recursive: true });
   fs.cpSync(path.join(repo, "public"), path.join(standalone, "public"), { recursive: true });
 
-  // The server, shipped next to the app as resources/server, and the app: the main process, its icons, and the name and version it reports.
+  // The server, shipped next to the app as resources/server, and the app's own files.
   const { version } = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8"));
   const server = path.join(work, "server");
-  const app = path.join(work, "app");
+  const desktop = path.join(repo, "desktop");
   stage(filesUnder(standalone, work), server);
-  stage(["main.mjs", "preload.cjs", "icon.ico", "icon.png"].map((file) => [file, path.join(repo, "desktop", file)]), app);
-  fs.writeFileSync(
-    path.join(app, "package.json"),
-    // author names the company in the Windows executable's details, which otherwise keep Electron's.
-    JSON.stringify({ name: "aicooldown", productName: "AI Cooldown", version, description: "Know when your AI limits come back", author: { name: "AI Cooldown" }, main: "main.mjs", license: "MIT" }),
-  );
   const secrets = localSecrets();
   const serverFiles = filesUnder(server, work);
   checkForLeaks(serverFiles, secrets, SERVER_ENTRIES);
-  checkForLeaks(filesUnder(app, work), secrets, APP_ENTRIES);
+  checkForLeaks(APP_FILES.map((file) => [file, path.join(desktop, file)]), secrets);
 
   // electron-builder downloads the Electron release it packs; the npm package is only where its version is pinned.
-  const desktop = path.join(repo, "desktop");
   run("npm", ["ci", "--no-audit", "--no-fund"], desktop, { ELECTRON_SKIP_BINARY_DOWNLOAD: "1" });
   const desktopRequire = createRequire(path.join(desktop, "package.json"));
   const [platform, target, ext] = TARGET;
   fs.rmSync(DIST, { recursive: true, force: true });
   await desktopRequire("electron-builder").build({
-    projectDir: app,
+    projectDir: desktop,
     publish: "never",
     [platform]: [target],
     [process.arch]: true,
@@ -156,6 +151,12 @@ async function build(work) {
       electronVersion: desktopRequire("electron/package.json").version,
       npmRebuild: false,
       directories: { output: DIST },
+      files: APP_FILES,
+      // What the app reports about itself, rather than desktop/package.json's packaging details; author names the company in
+      // the Windows executable's details, which otherwise keep Electron's.
+      extraMetadata: { name: "aicooldown", productName: "AI Cooldown", version, description: "Know when your AI limits come back", author: { name: "AI Cooldown" }, main: "main.mjs", license: "MIT" },
+      // Where installed copies look for updates (resources/app-update.yml), and what latest.yml points them to. The release workflow uploads it.
+      publish: { provider: "github", owner: "iyedbhd", repo: "aicooldown" },
       artifactName: `${NAME}.\${ext}`,
       // Copied in here, before signing and the installer, rather than as extraResources, which leave out a top-level node_modules.
       afterPack: async ({ appOutDir, electronPlatformName, packager }) => {
@@ -163,13 +164,13 @@ async function build(work) {
           electronPlatformName === "darwin" ? path.join(appOutDir, `${packager.appInfo.productFilename}.app`, "Contents", "Resources") : path.join(appOutDir, "resources");
         fs.cpSync(server, path.join(resources, "server"), { recursive: true });
       },
-      win: { icon: path.join(app, "icon.ico") },
+      win: { icon: path.join(desktop, "icon.ico") },
       // installer.nsh removes the "open at login" entry on uninstall.
       nsis: { oneClick: true, perMachine: false, differentialPackage: false, include: path.join(desktop, "installer.nsh") },
       // Ad hoc: Apple Silicon runs no unsigned code, and there is no Developer ID. Hardened runtime would reject Electron's own signed frameworks then.
-      mac: { icon: path.join(app, "icon.png"), identity: "-", hardenedRuntime: false, category: "public.app-category.developer-tools" },
+      mac: { icon: path.join(desktop, "icon.png"), identity: "-", hardenedRuntime: false, category: "public.app-category.developer-tools" },
       dmg: { writeUpdateInfo: false },
-      linux: { icon: path.join(app, "icon.png"), category: "Development", executableName: "aicooldown" },
+      linux: { icon: path.join(desktop, "icon.png"), category: "Development", executableName: "aicooldown" },
     },
   });
 
@@ -180,8 +181,18 @@ async function build(work) {
   if (packedServer.length !== serverFiles.length) throw new Error(`The packed app has ${packedServer.length} of the server's ${serverFiles.length} files.`);
   const packed = filesUnder(resources, DIST);
   checkForLeaks(packed, secrets);
+  if (!fs.readFileSync(path.join(resources, "app-update.yml"), "utf8").includes("provider: github")) throw new Error("The packed app does not know where its updates come from.");
 
   const out = path.join(DIST, `${NAME}.${ext}`);
+  // What installed copies download to update themselves, checked against the installer just made. macOS copies are only told about new releases.
+  if (platform !== "mac") {
+    const info = fs.readFileSync(path.join(DIST, platform === "win" ? "latest.yml" : "latest-linux.yml"), "utf8");
+    const field = (key) => new RegExp(`^${key}: ['"]?([^'"
+]+)`, "m").exec(info)?.[1].trim();
+    const sha512 = createHash("sha512").update(fs.readFileSync(out)).digest("base64");
+    if (field("version") !== version || field("path") !== path.basename(out) || field("sha512") !== sha512) throw new Error(`The update info does not describe ${path.basename(out)} ${version}:
+${info}`);
+  }
   const sha256 = createHash("sha256").update(fs.readFileSync(out)).digest("hex");
   console.log(`\n${path.relative(ROOT, out)}  ${(fs.statSync(out).size / 2 ** 20).toFixed(1)} MB  sha256 ${sha256}`);
   console.log(`${serverFiles.length} server files and ${packed.length} packed files checked against ${secrets.length} local .env values and credential patterns: nothing private.`);
