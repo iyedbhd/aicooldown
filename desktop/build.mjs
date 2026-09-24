@@ -130,7 +130,8 @@ async function build(work) {
   stage(["main.mjs", "preload.cjs", "icon.ico", "icon.png"].map((file) => [file, path.join(repo, "desktop", file)]), app);
   fs.writeFileSync(
     path.join(app, "package.json"),
-    JSON.stringify({ name: "aicooldown", productName: "AI Cooldown", version, description: "Know when your AI limits come back", main: "main.mjs", license: "MIT" }),
+    // author names the company in the Windows executable's details, which otherwise keep Electron's.
+    JSON.stringify({ name: "aicooldown", productName: "AI Cooldown", version, description: "Know when your AI limits come back", author: { name: "AI Cooldown" }, main: "main.mjs", license: "MIT" }),
   );
   const secrets = localSecrets();
   const serverFiles = filesUnder(server, work);
