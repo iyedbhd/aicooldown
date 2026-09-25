@@ -1,4 +1,4 @@
-import { SHARE_NOTHING, type Member, type Role, type SharePolicy, type Workspace } from "../team";
+import { GRANT_NOTHING, SHARE_NOTHING, type Grant, type Member, type Role, type Workspace } from "../team";
 import { listAccountsWithUsage } from "./accounts";
 import { recentCommands } from "./commands";
 import type { User } from "./auth";
@@ -7,17 +7,18 @@ import { listDevices } from "./devices";
 import { RequestError } from "./request-error";
 import { purgeExpired } from "./retention";
 import { listRuns } from "./runs";
-import { managedBy, policiesOf, SHARE_ALL, showsWork } from "./sharing";
+import { GRANT_ALL, grantFor, grantsAny, policiesOf, relations, showsWork } from "./sharing";
 import { listInvites, roleIn } from "./teams";
 
 const ROLE_ORDER: Record<Role, number> = { owner: 0, admin: 1, member: 2 };
 
 /**
  * Everything the team page shows for `scope`: a team's id, or "me" for the
- * personal workspace. Computers, accounts and sessions come only for the
- * people the viewer may see them for: themselves, or everyone when they own
- * or administer the team, and of those all the work of its members and what
- * its other owners and admins share (see sharing.ts).
+ * personal workspace. Computers, accounts and remote sessions come only for
+ * the people the viewer may see them for: themselves, or everyone when they
+ * own or administer the team (all of a member's work, what an owner or admin
+ * shares; see sharing.ts). Of anyone else, only the projects and chats they
+ * share with the viewer, on computers that show nothing more than their name.
  */
 export async function workspace(viewer: User, scope: string): Promise<Workspace> {
   await ensureSchema();
@@ -41,11 +42,21 @@ export async function workspace(viewer: User, scope: string): Promise<Workspace>
   }
   const seesAll = role === "owner" || role === "admin";
   const detailed = people.filter((p) => seesAll || p.id === viewer.id).map((p) => p.id);
-  const [managed, policies] = await Promise.all([seesAll ? managedBy(viewer.id) : new Set<string>(), policiesOf(detailed)]);
-  const grants = new Map<string, SharePolicy>(detailed.map((id) => [id, id === viewer.id || managed.has(id) ? SHARE_ALL : (policies.get(id) ?? SHARE_NOTHING)]));
-  const [devices, accounts, invites] = await Promise.all([listDevices(detailed, viewer.id, grants), listAccountsWithUsage(detailed), team && seesAll ? listInvites(team.id) : []]);
+  const [related, policies] = await Promise.all([team ? relations(viewer.id) : new Map(), policiesOf(people.map((p) => p.id))]);
+  const grants = new Map<string, Grant>();
+  for (const p of people) {
+    const rel = related.get(p.id);
+    grants.set(p.id, p.id === viewer.id ? GRANT_ALL : rel ? grantFor(policies.get(p.id) ?? SHARE_NOTHING, viewer.id, rel) : GRANT_NOTHING);
+  }
+  // The others' computers too, for what they share with the viewer.
+  const withWork = people.filter((p) => detailed.includes(p.id) || grantsAny(grants.get(p.id)!)).map((p) => p.id);
+  const [devices, accounts, invites] = await Promise.all([
+    listDevices(withWork, viewer.id, grants, new Set(detailed)),
+    listAccountsWithUsage(detailed),
+    team && seesAll ? listInvites(team.id) : [],
+  ]);
   const [runs, commands] = await Promise.all([
-    listRuns(devices.map((d) => d.id), viewer.id, team?.id ?? null),
+    listRuns(devices.filter((d) => detailed.includes(d.userId)).map((d) => d.id), viewer.id, team?.id ?? null),
     recentCommands(devices.filter((d) => d.userId === viewer.id).map((d) => d.id)),
   ]);
   for (const d of devices) d.commands = commands.get(d.id) ?? [];
@@ -53,7 +64,7 @@ export async function workspace(viewer: User, scope: string): Promise<Workspace>
   // A run shows with what it worked on: a project or chat its computer's owner shares with the viewer.
   const shownRuns = runs.filter((r) => {
     const d = byId.get(r.deviceId);
-    return d !== undefined && showsWork(grants.get(d.userId) ?? SHARE_NOTHING, d, r.tool, r.project, [r.sessionId, r.resume]);
+    return d !== undefined && showsWork(grants.get(d.userId) ?? GRANT_NOTHING, d, r.tool, r.project, [r.sessionId, r.resume]);
   });
   const members: Member[] = people.map((p) => ({
     ...p,

@@ -24,7 +24,7 @@ import { db, ensureSchema, placeholders } from "./db";
 import { deviceById, deviceName, heatDevice, isOnline, type DeviceRecord } from "./devices";
 import { RequestError } from "./request-error";
 import { accessTo, showsWork } from "./sharing";
-import { seesRun } from "./teams";
+import { adminOver, seesRun } from "./teams";
 
 /*
  * Remote sessions: a prompt for Claude Code or Codex, queued here for one
@@ -143,7 +143,8 @@ async function visibleRun(viewer: User, id: string): Promise<Row> {
 
 export async function createRun(viewer: User, raw: Record<string, unknown>): Promise<Run> {
   const device = typeof raw.deviceId === "string" ? await deviceById(raw.deviceId) : null;
-  const grant = device && (await accessTo(viewer.id, device.userId));
+  // Its owner, or an owner or admin of their team, in what they see of the owner's work: sharing a project with a member lets them read it, not run things.
+  const grant = device && (viewer.id === device.userId || (await adminOver(viewer.id, device.userId))) ? await accessTo(viewer.id, device.userId) : null;
   if (!device || !grant) throw new RequestError(404, "Computer not found.");
   const name = deviceName(device);
   const prompt = typeof raw.prompt === "string" ? raw.prompt.trim() : "";
@@ -263,7 +264,8 @@ export async function claimRun(device: DeviceRecord): Promise<RunJob | null> {
     });
     const r = res.rows[0] as Row | undefined;
     if (!r) return null;
-    const grant = await accessTo(String(r.created_by), device.userId);
+    const creator = String(r.created_by);
+    const grant = creator === device.userId || (await adminOver(creator, device.userId)) ? await accessTo(creator, device.userId) : null;
     const resume = r.resume_session === null ? null : String(r.resume_session);
     if (!grant || !showsWork(grant, device, String(r.tool) as Tool, String(r.project), [resume])) {
       await db().execute({ sql: "UPDATE runs SET status = 'failed', finished_at = ?, result = ? WHERE id = ?", args: [Date.now(), failed("Whoever started it may no longer start sessions there."), String(r.id)] });

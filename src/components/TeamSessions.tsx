@@ -125,7 +125,7 @@ export function TeamSessions({ ws, sessions, now, filter, onFilter, onNewChat, o
   const live = liveNow(ws, sessions);
   const needle = filter.search.trim().toLowerCase();
   const filtered = sessions.filter((s) => matches(s, filter, needle));
-  const people = ws.members.filter((m) => m.detailed && m.devices.length > 0);
+  const people = ws.members.filter((m) => m.devices.length > 0);
   const devices = ws.members.flatMap((m) => m.devices);
   const projects = [...new Set(sessions.map((s) => s.project))].sort((a, b) => a.localeCompare(b));
   const filtering = JSON.stringify(filter) !== JSON.stringify(NO_FILTER);
@@ -353,7 +353,10 @@ export function SessionLine({ s, showMember, now, onOpen }: { s: SessionRow; sho
             {s.active && <span className="live absolute -right-1 -top-1 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-panel" aria-label="live" />}
           </span>
           <span className="min-w-0">
-            <span className="block truncate text-sm text-fg">{s.title ?? s.project}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-sm text-fg">{s.title ?? s.project}</span>
+              {!s.member.detailed && <span className="chip shrink-0">shared with you</span>}
+            </span>
             <span className="block truncate font-mono text-[11px] text-muted">
               {s.title ? `${s.project} · ` : ""}
               {s.branch ? `${s.branch} · ` : ""}

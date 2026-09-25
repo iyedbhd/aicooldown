@@ -46,7 +46,7 @@ export function DevicePanel({ device, tools, user, now, busy, run }: Props) {
         ? "Let what the Claude Code and Codex sessions on this computer say reach the website?\n\nSigned in as you, you then see each session's title (or its first " +
           "prompt) on the Team page, and can have any session's conversation sent there, and continue it: prompts, replies, the commands run and what they " +
           "printed, which can include code, file contents and anything else a session saw. A conversation is sent only when asked for, and kept there a week. " +
-          "The owners and admins of the teams you run see it only for the projects and chats you share with them on the Team page."
+          "The people in your teams see it only for the projects and chats you share with them on the Team page."
         : null;
     if (question && !window.confirm(question)) return;
     void run(

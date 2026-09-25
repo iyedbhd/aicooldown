@@ -48,7 +48,8 @@ const TOOL_WORD: Record<ToolState, string> = { ready: "ready", "signed-out": "no
 /** The connected computers: what they are, whose accounts their CLIs use, what they work on, what they share, and what remote sessions may do there. */
 export function TeamComputers(props: Props) {
   const { ws } = props;
-  const devices = ws.members.flatMap((m) => m.devices.map((d) => ({ device: d, owner: m })));
+  // Someone who only shares some work with the viewer lends their computers' names to it, and shows none here.
+  const devices = ws.members.filter((m) => m.detailed).flatMap((m) => m.devices.map((d) => ({ device: d, owner: m })));
   if (devices.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-line p-8 text-center">
@@ -71,7 +72,7 @@ export function TeamComputers(props: Props) {
     );
   }
   // In a team, each person's computers together: someone signed in on several shows as one person with all of them.
-  const people = ws.members.filter((m) => m.devices.length > 0);
+  const people = ws.members.filter((m) => m.detailed && m.devices.length > 0);
   return (
     <div className="space-y-6">
       <LoginsCard ws={ws} />
@@ -113,7 +114,7 @@ type Login = { tool: Tool; email: string; places: { device: Device; owner: Membe
  */
 function LoginsCard({ ws }: { ws: Workspace }) {
   const logins = new Map<string, Login>();
-  for (const owner of ws.members) {
+  for (const owner of ws.members.filter((m) => m.detailed)) {
     for (const device of owner.devices) {
       for (const tool of ["claude", "codex"] as const) {
         const email = device.logins[tool];

@@ -65,6 +65,7 @@ export function TeamPeople({ ws, sessions, period, now, reload, flash, onOpenSes
                         {m.role && <RoleBadge role={m.role} />}
                         {m.id === ws.me.id && <span className="text-[11px] text-faint">you</span>}
                         {m.sharing && m.id !== ws.me.id && <SharingChip sharing={m.sharing} />}
+                        {!m.detailed && m.devices.length > 0 && <span className="chip">shares with you</span>}
                         {live > 0 && (
                           <span className="chip chip-good">
                             <span className="live h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
@@ -361,6 +362,7 @@ function InviteCard({ ws, now, reload, flash }: { ws: Workspace; now: number; re
           A member shows the owner and admins all their work: their connected computers, every Claude Code and Codex session there with its title and
           conversation (when, where, which models, how many tokens), their projects and account limits, and the owner and admins start and continue sessions on
           their computers where they allow it. An admin shows the owner and other admins their computers and limits, and only the projects and chats they share.
+          Everyone shares projects and chats with the people they pick.
           Never account credentials.
         </p>
       </div>

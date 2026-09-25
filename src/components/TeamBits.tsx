@@ -74,27 +74,6 @@ export function SharingChip({ sharing }: { sharing: Sharing }) {
   );
 }
 
-/**
- * Whether the other owners and admins of your teams see this project or chat
- * of yours; a click shares it or stops. `locked` says why it is shared anyway
- * (everything is, or its project is) and keeps it as it is.
- */
-export function ShareButton({ shared, locked, busy, onToggle }: { shared: boolean; locked: string | null; busy: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      disabled={busy || locked !== null}
-      aria-pressed={shared}
-      title={locked ?? (shared ? "The other owners and admins of your teams see it. Click to stop sharing it." : "Only you see it. Click to share it with the other owners and admins of your teams.")}
-      className={`chip shrink-0 transition hover:brightness-95 disabled:cursor-default ${shared ? "chip-good" : ""}`}
-    >
-      <Icon name={shared ? "eye" : "lock"} size={11} />
-      {busy ? "…" : shared ? "shared" : "not shared"}
-    </button>
-  );
-}
-
 /** A titled panel. */
 export function Card({ title, action, children, className = "" }: { title: string; action?: ReactNode; children: ReactNode; className?: string }) {
   return (

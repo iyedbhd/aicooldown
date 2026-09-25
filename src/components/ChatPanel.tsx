@@ -13,17 +13,14 @@ import {
   fetchTranscript,
   heatDevice,
   levelAllows,
-  manages,
   mayRunOn,
   MAX_PROMPT,
   parseImageRef,
-  projectShared,
   REMOTE_HELP,
   REMOTE_LABEL,
   REMOTE_LEVELS,
   requestTranscript,
   RUN_FINISHED,
-  sessionShared,
   startRun,
   TOOL_NAME,
   unavailable,
@@ -40,7 +37,8 @@ import { sourceLabel, type SessionRow } from "@/lib/team-stats";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
 import { ImageGallery, ImageProvider, Lightbox, SessionImage, useImageLoader } from "./SessionImages";
-import { ShareButton, StatusChip } from "./TeamBits";
+import { ShareMenu } from "./ShareMenu";
+import { StatusChip } from "./TeamBits";
 
 /** What the chat opens on: one of the sessions the computers reported, a remote session, or a new conversation. */
 export type ChatTarget = { kind: "session"; key: string } | { kind: "run"; id: string } | { kind: "new"; deviceId?: string };
@@ -166,7 +164,6 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [details, setDetails] = useState(false);
-  const [sharingBusy, setSharingBusy] = useState(false);
   const [view, setView] = useState<ChatView>(storedView);
   /** The image open large, by its number in the session. */
   const [viewing, setViewing] = useState<number | null>(null);
@@ -309,15 +306,8 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
   const chosenModel = model ?? last?.model ?? sessionModel ?? "";
   const modes = REMOTE_LEVELS.filter((l) => device && levelAllows(device.remote, l));
   const projects = projectsOn(device);
-  // Your own conversation, in a team you run: whether its other owners and admins see it.
-  const sharing = session && own && ws.team && manages(ws.role) ? ws.sharing : null;
-  const shared = Boolean(sharing && session && sessionShared(sharing, session.key, session.project));
-  async function toggleShared() {
-    if (!session) return;
-    setSharingBusy(true);
-    await onShare({ session: session.key, shared: !shared });
-    setSharingBusy(false);
-  }
+  // Your own conversation, in a team: whom you share it with.
+  const shareable = Boolean(session && own && ws.team);
 
   async function send() {
     const text = prompt.trim();
@@ -389,20 +379,7 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
               )}
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              {sharing && session && (
-                <ShareButton
-                  shared={shared}
-                  locked={
-                    sharing.all
-                      ? "You share everything. Pick \u201cWhat you pick\u201d under the team's name to share chats one by one."
-                      : projectShared(sharing, session.project)
-                        ? `Shared with its project, ${session.project}.`
-                        : null
-                  }
-                  busy={sharingBusy}
-                  onToggle={() => void toggleShared()}
-                />
-              )}
+              {shareable && session && <ShareMenu ws={ws} kind="session" item={session.key} project={session.project} onShare={onShare} />}
               {session && (
                 <button type="button" onClick={() => setDetails((d) => !d)} aria-expanded={details} className="rounded-lg px-2 py-1 text-[11px] text-muted hover:bg-panel-2 hover:text-fg">
                   details

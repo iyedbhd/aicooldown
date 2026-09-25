@@ -66,7 +66,7 @@ function SharingLine({ ws, onShare }: { ws: Workspace; onShare: (change: Sharing
       <p className="mt-2 flex max-w-3xl items-start gap-1.5 text-xs text-muted">
         <Icon name="eye" size={12} className="mt-0.5 shrink-0" />
         As a member, the team&apos;s owner and admins see all your work on the computers you connect: every project and session, what your sessions say included, and
-        they can continue those sessions where you allow remote sessions.
+        they can continue those sessions where you allow remote sessions. Share projects with other members on the Projects tab, and chats from their header.
       </p>
     );
   }
@@ -84,7 +84,8 @@ function SharingLine({ ws, onShare }: { ws: Workspace; onShare: (change: Sharing
     await onShare({ all: everything });
     setBusy(false);
   }
-  const picked = [projects.length && `${projects.length} project${projects.length === 1 ? "" : "s"}`, sessions.length && `${sessions.length} chat${sessions.length === 1 ? "" : "s"}`].filter(Boolean);
+  const [np, ns] = [Object.keys(projects).length, Object.keys(sessions).length];
+  const picked = [np && `${np} project${np === 1 ? "" : "s"}`, ns && `${ns} chat${ns === 1 ? "" : "s"}`].filter(Boolean);
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
       <span className="flex items-start gap-1.5">
@@ -106,7 +107,7 @@ function SharingLine({ ws, onShare }: { ws: Workspace; onShare: (change: Sharing
           </button>
         ))}
       </div>
-      {!all && <span className="text-faint">{picked.length ? `${picked.join(" and ")} shared` : "nothing yet: share projects on the Projects tab, and chats from their details"}</span>}
+      {!all && <span className="text-faint">{picked.length ? `${picked.join(" and ")} shared` : "nothing yet: share projects on the Projects tab, and chats from their header"}</span>}
     </div>
   );
 }

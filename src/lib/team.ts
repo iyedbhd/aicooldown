@@ -7,9 +7,9 @@ import type { Account, Provider, Usage } from "./types";
  * Teams: people, the computers they connected, every Claude Code and Codex
  * session on those computers, the limits of their linked accounts, and
  * sessions started on a computer from the dashboard. Owners and admins see all
- * of it for the team's members, and of each other what each shares (see
- * SharePolicy); members see the roster and their own. Everyone has a personal
- * workspace, "me", with just their own.
+ * of it for the team's members; everyone else sees what each person shares
+ * with them (see SharePolicy), and members see the roster and their own.
+ * Everyone has a personal workspace, "me", with just their own.
  */
 
 export type Role = "owner" | "admin" | "member";
@@ -51,26 +51,48 @@ export const SHARE_LABEL: Record<ShareLevel, string> = { off: "Private", on: "On
 
 export const SHARE_HELP: Record<ShareLevel, string> = {
   off: "Sessions show on the Team page without titles, and their conversations stay on this computer: nobody reads them on the website, you included.",
-  on: "You see session titles and can read and continue any conversation from the website. Your teams' owners and admins see the projects and chats you share with them.",
+  on: "You see session titles and can read and continue any conversation from the website. The people in your teams see the projects and chats you share with them.",
 };
 
 /**
- * What a team's owner or admin shows the other owners and admins of their
- * teams: everything, or the projects (by folder name, on all their computers)
- * and single chats they pick, and nothing until they pick. A member shows
- * everything: their teams' owners and admins manage them.
+ * Whom something is shared with: the owners and admins of the sharer's teams
+ * ("admins"), everyone in one of their teams ("team:<id>"), or one person in a
+ * team with them ("user:<id>"). An audience reaches whoever it names while
+ * they are in a team together, and nobody once they are not.
  */
-export type SharePolicy = { all: boolean; projects: string[]; sessions: string[] };
+export type Audience = string;
 
-export const SHARE_NOTHING: SharePolicy = { all: false, projects: [], sessions: [] };
+export const ADMINS: Audience = "admins";
+export const teamAudience = (teamId: string): Audience => `team:${teamId}`;
+export const userAudience = (userId: string): Audience => `user:${userId}`;
+
+/**
+ * What someone shares of their work, and with whom: the projects they pick
+ * (by folder name, on all their computers) and single chats, each with its
+ * audiences, and nothing else until they pick; an owner or admin may also
+ * show the other owners and admins of their teams everything (`all`). A
+ * member's work shows to their teams' owners and admins whatever this says:
+ * those manage them.
+ */
+export type SharePolicy = { all: boolean; projects: Record<string, Audience[]>; sessions: Record<string, Audience[]> };
+
+export const SHARE_NOTHING: SharePolicy = { all: false, projects: {}, sessions: {} };
+
+/** The audiences a project (by name) or chat (by sessionKey) of yours is shared with. */
+export const audiencesOf = (policy: SharePolicy, kind: "project" | "session", key: string): Audience[] => (kind === "project" ? policy.projects[key] : policy.sessions[key]) ?? [];
+
+/** What one person sees of someone else's work: all of it, or these projects and chats. */
+export type Grant = { all: boolean; projects: string[]; sessions: string[] };
+
+export const GRANT_NOTHING: Grant = { all: false, projects: [], sessions: [] };
 
 /** A session among all of them, as SharePolicy and the Sessions tab name it: its computer, CLI and id. */
 export const sessionKey = (deviceId: string, tool: Tool, id: string) => `${deviceId}:${tool}:${id}`;
 
-export const projectShared = (policy: SharePolicy, name: string) => policy.all || policy.projects.includes(name);
+export const projectShared = (grant: Grant, name: string) => grant.all || grant.projects.includes(name);
 
 /** A session is shared by itself, or with its project. */
-export const sessionShared = (policy: SharePolicy, key: string, project: string) => projectShared(policy, project) || policy.sessions.includes(key);
+export const sessionShared = (grant: Grant, key: string, project: string) => projectShared(grant, project) || grant.sessions.includes(key);
 
 /** A project's name, as the Projects tab and SharePolicy know it: its folder's. */
 export function projectName(activity: DeviceActivity | null, tool: Tool, path: string): string {
@@ -84,7 +106,7 @@ export type Sharing = "managed" | "all" | "picked";
 export type DeviceSharing = {
   /** The teams its owner is a member of: their owners and admins see everything here, what sessions say included. */
   managedBy: string[];
-  /** What its owner shows the other owners and admins of the teams they run: all of it, or these projects, and these sessions here ("tool:id"). */
+  /** What its owner shows anyone else: all of it (to the owners and admins of the teams they run), or these projects, and these sessions here ("tool:id"). */
   all: boolean;
   projects: string[];
   sessions: string[];
@@ -272,7 +294,7 @@ export type Workspace = {
   members: Member[];
   invites: Invite[];
   runs: Run[];
-  /** What you share with the other owners and admins of the teams you run. */
+  /** What you share, and with whom. */
   sharing: SharePolicy;
   /** The server's clock, to judge "seen 2 minutes ago" without trusting the browser's. */
   now: number;
@@ -331,8 +353,8 @@ export const acceptInvite = (token: string) => requestJson<{ teamId: string }>(`
 export const removeDevice = (deviceId: string) => requestJson("/api/devices", { method: "DELETE", body: { deviceId } });
 /** Names one of your computers ("Work laptop"); an empty name goes back to its host name. */
 export const renameDevice = (deviceId: string, label: string) => requestJson("/api/devices", { method: "PATCH", body: { deviceId, label } });
-/** Shares everything or what you pick, or shares or stops sharing a project (by name) or one session (by sessionKey). */
-export type SharingChange = { all: boolean } | { project: string; shared: boolean } | { session: string; shared: boolean };
+/** Shares everything with the owners and admins of your teams, or what you pick; or shares a project (by name) or one session (by sessionKey) with an audience, or stops. */
+export type SharingChange = { all: boolean } | { project: string; audience: Audience; shared: boolean } | { session: string; audience: Audience; shared: boolean };
 export const changeSharing = (change: SharingChange) => requestJson<{ sharing: SharePolicy }>("/api/sharing", { method: "POST", body: change });
 export const startRun = (run: NewRun) => requestJson<{ run: Run }>("/api/runs", { method: "POST", body: run });
 export const fetchRun = (id: string, after: number) => requestJson<{ run: Run; events: RunEvent[] }>(`/api/runs/${id}?after=${after}`);

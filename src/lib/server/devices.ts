@@ -1,6 +1,6 @@
 import type { DeviceActivity, ModelUsage, ProjectActivity, SessionActivity, TokenRow } from "../activity";
 import type { CliProfile, HelloRun, HelloSchedule, ScheduleMode } from "../local";
-import { MODEL_NAME, REMOTE_LEVELS, SESSION_ID, SHARE_NOTHING, type Device, type DeviceInfo, type DeviceManage, type RemoteLevel, type SharePolicy, type ShareLevel, type ToolState } from "../team";
+import { GRANT_NOTHING, MODEL_NAME, REMOTE_LEVELS, SESSION_ID, type Device, type DeviceInfo, type DeviceManage, type Grant, type RemoteLevel, type ShareLevel, type ToolState } from "../team";
 import { decrypt, encrypt, newId, openJson, randomToken, sealJson, sha256 } from "./crypto";
 import { db, ensureSchema, placeholders } from "./db";
 import { RequestError } from "./request-error";
@@ -289,31 +289,62 @@ export async function deviceById(id: string): Promise<DeviceRecord | null> {
  * These users' devices as `viewerId` sees them, most recently seen first: the
  * projects and sessions each owner's grant shows (see sharing.ts), and the
  * saved logins and scheduled hellos for its owner only (the workspace adds
- * the owner's commands).
+ * the owner's commands). Of an owner not `detailed` (someone who only shares
+ * some work with the viewer), only computers with something shared, and of
+ * those only what places a shared session: their name and whether they are on.
  */
-export async function listDevices(userIds: string[], viewerId: string, grants: Map<string, SharePolicy>): Promise<Device[]> {
+export async function listDevices(userIds: string[], viewerId: string, grants: Map<string, Grant>, detailed: Set<string>): Promise<Device[]> {
   await ensureSchema();
   const res = await db().execute({ sql: `SELECT * FROM devices WHERE user_id IN (${placeholders(userIds.length)}) ORDER BY last_seen_at DESC`, args: userIds });
   const now = Date.now();
-  return res.rows.map((r) => {
+  return res.rows.flatMap((r) => {
     const d = toRecord(r as Row);
     const own = d.userId === viewerId;
-    const activity = d.activity && visibleActivity(d.activity, grants.get(d.userId) ?? SHARE_NOTHING, d.id);
-    return {
-      ...d.info,
-      name: deviceName(d),
-      hostname: d.info.name,
-      label: d.label,
-      id: d.id,
-      userId: d.userId,
-      createdAt: d.createdAt,
-      lastSeenAt: d.lastSeenAt,
-      online: isOnline(d, now),
-      connected: d.connected,
-      activity,
-      manage: own ? d.manage : null,
-      commands: [],
-    };
+    const activity = d.activity && visibleActivity(d.activity, grants.get(d.userId) ?? GRANT_NOTHING, d.id);
+    if (!detailed.has(d.userId)) {
+      if (!activity || (activity.projects.length === 0 && activity.sessions.length === 0)) return [];
+      return [
+        {
+          ...d.info,
+          name: deviceName(d),
+          hostname: deviceName(d),
+          label: null,
+          os: "",
+          platform: "",
+          arch: "",
+          version: "",
+          logins: { claude: null, codex: null },
+          remote: "off" as const,
+          tools: { claude: "missing" as const, codex: "missing" as const },
+          id: d.id,
+          userId: d.userId,
+          createdAt: d.createdAt,
+          lastSeenAt: d.lastSeenAt,
+          online: isOnline(d, now),
+          connected: d.connected,
+          activity,
+          manage: null,
+          commands: [],
+        },
+      ];
+    }
+    return [
+      {
+        ...d.info,
+        name: deviceName(d),
+        hostname: d.info.name,
+        label: d.label,
+        id: d.id,
+        userId: d.userId,
+        createdAt: d.createdAt,
+        lastSeenAt: d.lastSeenAt,
+        online: isOnline(d, now),
+        connected: d.connected,
+        activity,
+        manage: own ? d.manage : null,
+        commands: [],
+      },
+    ];
   });
 }
 

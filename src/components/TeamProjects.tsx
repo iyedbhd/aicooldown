@@ -3,11 +3,12 @@
 import { useState } from "react";
 import { formatTokens, lastDays } from "@/lib/activity";
 import { formatAgo, formatMoney } from "@/lib/format";
-import { manages, projectShared, type SharingChange, type Workspace } from "@/lib/team";
+import type { SharingChange, Workspace } from "@/lib/team";
 import { rollupProjects, type Period, type SessionRow } from "@/lib/team-stats";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
-import { Avatar, Card, Empty, ShareButton } from "./TeamBits";
+import { ShareMenu } from "./ShareMenu";
+import { Avatar, Card, Empty } from "./TeamBits";
 import { SessionLine, type SessionFilter } from "./TeamSessions";
 
 type Props = {
@@ -25,21 +26,15 @@ const LATEST = 5;
 
 /**
  * What people work on: each project across everyone's computers, busiest
- * first, and opened, where and by whom and its latest sessions. An owner or
- * admin shares their own projects with the team's other owners and admins
- * from here, by name: on all of their computers.
+ * first, and opened, where and by whom and its latest sessions. Everyone
+ * shares their own projects from here, by name (on all of their computers),
+ * with whom they pick; projects others share with you show here too.
  */
 export function TeamProjects({ ws, sessions, period, now, onShowSessions, onOpenSession, onShare }: Props) {
   const [open, setOpen] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const sharing = ws.team && manages(ws.role) ? ws.sharing : null;
-  async function toggle(name: string, shared: boolean) {
-    setBusy(name);
-    await onShare({ project: name, shared });
-    setBusy(null);
-  }
+  // Everyone the viewer sees work of: all of it, or what they share with the viewer.
   const projects = rollupProjects(
-    ws.members.filter((m) => m.detailed),
+    ws.members.filter((m) => m.detailed || m.devices.length > 0),
     lastDays(period, now)[0],
   );
 
@@ -51,18 +46,13 @@ export function TeamProjects({ ws, sessions, period, now, onShowSessions, onOpen
         <ul className="divide-y divide-line">
           {projects.map((p) => {
             const expanded = open === p.name;
-            const mine = sharing !== null && p.places.some((x) => x.member.id === ws.me.id);
-            const shared = mine && projectShared(sharing, p.name);
+            const mine = Boolean(ws.team) && p.places.some((x) => x.member.id === ws.me.id);
+            const theirs = p.places.some((x) => !x.member.detailed);
             return (
               <li key={p.name} className="relative">
                 {mine && (
                   <span className="absolute right-4 top-3 z-10">
-                    <ShareButton
-                      shared={shared}
-                      locked={sharing.all ? "You share everything. Pick \u201cWhat you pick\u201d under the team's name to share projects one by one." : null}
-                      busy={busy === p.name}
-                      onToggle={() => void toggle(p.name, !shared)}
-                    />
+                    <ShareMenu ws={ws} kind="project" item={p.name} onShare={onShare} />
                   </span>
                 )}
                 <button
@@ -79,6 +69,7 @@ export function TeamProjects({ ws, sessions, period, now, onShowSessions, onOpen
                         {p.tools.map((t) => (
                           <ProviderGlyph key={t} provider={t} size={12} />
                         ))}
+                        {theirs && <span className="chip">shared with you</span>}
                       </span>
                       <span className="block truncate font-mono text-[11px] text-muted">
                         {p.branches.length ? `${p.branches.slice(0, 3).join(", ")} · ` : ""}

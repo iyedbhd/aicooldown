@@ -100,8 +100,8 @@ export function JoinTeam({ token }: { token: string }) {
                     <li>remote Claude Code and Codex sessions on your computers, which they can start only where you allow it</li>
                   </ul>
                   <p className="mt-2 text-[12px] text-faint">
-                    As a member you show them all of your work: your computers let what your sessions say reach them while you are one. Never your account
-                    credentials. Leave the team any time.
+                    As a member you show them all of your work: your computers let what your sessions say reach them while you are one. The other members
+                    see only what you share with them. Never your account credentials. Leave the team any time.
                   </p>
                 </>
               ) : (
@@ -109,11 +109,11 @@ export function JoinTeam({ token }: { token: string }) {
                   <ul className="mt-2 list-disc space-y-1 pl-5 text-[13px] text-muted">
                     <li>the computers you connect, and which accounts their Claude Code and Codex CLIs use</li>
                     <li>the limits of the Claude and Codex accounts linked to your AI Cooldown account</li>
-                    <li>of your projects and sessions, only the ones you share with them: you pick them on the Team page, or share everything</li>
+                    <li>of your projects and sessions, only the ones you share with them: you pick them, and with whom, on the Team page</li>
                   </ul>
                   <p className="mt-2 text-[12px] text-faint">
-                    As an {invite.role} you see all of the members&apos; work, and they see what you choose to share. Never your account credentials. Leave the team any
-                    time.
+                    As an {invite.role} you see all of the members&apos; work, and everyone in the team sees what you share with them. Never your account
+                    credentials. Leave the team any time.
                   </p>
                 </>
               )}
