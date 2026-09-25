@@ -24,12 +24,12 @@ const MAX_TEXT = 4_000;
 const MAX_CHARS = 1_500_000;
 /** Transcripts kept per computer: asking for another lets the one updated longest ago go. */
 const MAX_PER_DEVICE = 50;
-const EVENT_KINDS: RunEventKind[] = ["user", "text", "tool", "output", "error", "info", "result"];
+const EVENT_KINDS: RunEventKind[] = ["user", "text", "tool", "output", "error", "info", "result", "image"];
 
 type Row = Record<string, unknown>;
 type Key = { deviceId: string; tool: Tool; sessionId: string };
 
-function keyOf(raw: Record<string, unknown>): Key {
+export function keyOf(raw: Record<string, unknown>): Key {
   const { deviceId, tool, sessionId } = raw;
   if (typeof deviceId !== "string" || (tool !== "claude" && tool !== "codex") || typeof sessionId !== "string" || !SESSION_ID.test(sessionId)) {
     throw new RequestError(400, "deviceId, tool and sessionId are required.");
@@ -38,7 +38,7 @@ function keyOf(raw: Record<string, unknown>): Key {
 }
 
 /** The session's computer, if the viewer sees the session: on their own computer, a member's of a team they run, or shared with them. */
-async function visibleDevice(viewer: User, k: Key): Promise<DeviceRecord> {
+export async function visibleDevice(viewer: User, k: Key): Promise<DeviceRecord> {
   const device = await deviceById(k.deviceId);
   const grant = device && (await accessTo(viewer.id, device.userId));
   if (!device || !grant) throw new RequestError(404, "Computer not found.");

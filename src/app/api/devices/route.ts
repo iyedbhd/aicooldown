@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { registerDevice, removeDevice } from "@/lib/server/devices";
+import { registerDevice, removeDevice, renameDevice } from "@/lib/server/devices";
 import { str } from "../_lib";
 import { userRoute } from "../_session";
 
@@ -14,6 +14,16 @@ export function POST(req: Request) {
   return userRoute(req, { write: true }, async (user, body) => {
     const { id, token } = await registerDevice(user.id, body.machineId, body.info);
     return NextResponse.json({ device: { id }, token, user });
+  });
+}
+
+/** Names one of your computers: `{ deviceId, label }`, an empty label for its host name. */
+export function PATCH(req: Request) {
+  return userRoute(req, { write: true }, async (user, body) => {
+    const deviceId = str(body, "deviceId");
+    if (!deviceId) return NextResponse.json({ error: "deviceId is required" }, { status: 400 });
+    await renameDevice(user.id, deviceId, body.label);
+    return NextResponse.json({ ok: true });
   });
 }
 

@@ -10,20 +10,23 @@ import {
   REMOTE_HELP,
   REMOTE_LABEL,
   removeDevice,
+  renameDevice,
   sendCommand,
   SHARE_HELP,
   TOOL_NAME,
   unavailable,
   versionAtLeast,
   type Device,
+  type Member,
   type NewCommand,
   type ToolState,
   type Workspace,
 } from "@/lib/team";
+import type { Tool } from "@/lib/activity";
 import { fullestWindow, totalsSince, type Period, type SessionRow } from "@/lib/team-stats";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
-import { Avatar, Empty, OnlineDot } from "./TeamBits";
+import { Avatar, Card, Empty, OnlineDot } from "./TeamBits";
 import type { SessionFilter } from "./TeamSessions";
 
 type Props = {
@@ -67,12 +70,98 @@ export function TeamComputers(props: Props) {
       </div>
     );
   }
+  // In a team, each person's computers together: someone signed in on several shows as one person with all of them.
+  const people = ws.members.filter((m) => m.devices.length > 0);
   return (
-    <div className="grid gap-4 md:grid-cols-2">
-      {devices.map(({ device, owner }) => (
-        <DeviceCard key={device.id} {...props} device={device} ownerEmail={owner.email} />
-      ))}
+    <div className="space-y-6">
+      <LoginsCard ws={ws} />
+      {ws.team && people.length > 0
+        ? people.map((m) => (
+            <section key={m.id}>
+              <h3 className="mb-2 flex items-center gap-2 text-sm font-medium text-fg-2">
+                <Avatar email={m.email} size={20} />
+                <span className="truncate">{m.id === ws.me.id ? "Your computers" : m.email}</span>
+                <span className="font-mono text-[11px] font-normal text-faint">
+                  {m.devices.filter((d) => d.online).length}/{m.devices.length} online
+                </span>
+              </h3>
+              <div className="grid gap-4 md:grid-cols-2">
+                {m.devices.map((device) => (
+                  <DeviceCard key={device.id} {...props} device={device} ownerEmail={m.email} />
+                ))}
+              </div>
+            </section>
+          ))
+        : (
+            <div className="grid gap-4 md:grid-cols-2">
+              {devices.map(({ device, owner }) => (
+                <DeviceCard key={device.id} {...props} device={device} ownerEmail={owner.email} />
+              ))}
+            </div>
+          )}
     </div>
+  );
+}
+
+type Login = { tool: Tool; email: string; places: { device: Device; owner: Member }[] };
+
+/**
+ * Each account the computers' CLIs are signed in with, and where: an account
+ * signed in on several computers shares one set of limits between them, so
+ * its usage there adds up. With the limits it last read, where someone linked
+ * that account.
+ */
+function LoginsCard({ ws }: { ws: Workspace }) {
+  const logins = new Map<string, Login>();
+  for (const owner of ws.members) {
+    for (const device of owner.devices) {
+      for (const tool of ["claude", "codex"] as const) {
+        const email = device.logins[tool];
+        if (!email) continue;
+        const key = `${tool}:${email.toLowerCase()}`;
+        const login = logins.get(key) ?? { tool, email, places: [] };
+        login.places.push({ device, owner });
+        logins.set(key, login);
+      }
+    }
+  }
+  const list = [...logins.values()].sort((a, b) => b.places.length - a.places.length || a.email.localeCompare(b.email));
+  if (list.length === 0) return null;
+  const accounts = ws.members.flatMap((m) => m.accounts);
+  const shared = list.filter((l) => l.places.length > 1).length;
+  return (
+    <Card title={`Logins · ${list.length}`} action={shared > 0 ? <span className="font-mono text-[11px] text-amber-700 dark:text-amber-300">{shared} on several computers</span> : undefined}>
+      <ul className="divide-y divide-line">
+        {list.map((l) => {
+          const account = accounts.find((a) => a.provider === l.tool && a.label.toLowerCase() === l.email.toLowerCase());
+          const window = account && fullestWindow(account);
+          return (
+            <li key={`${l.tool}:${l.email}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-xs">
+              <ProviderGlyph provider={l.tool} size={13} />
+              <span className="min-w-0 truncate font-mono text-[12px] text-fg-2">{l.email}</span>
+              {window && (
+                <span className={`font-mono text-[11px] ${window.usedPercent >= 90 ? "text-rose-600 dark:text-rose-300" : "text-muted"}`} title={window.label}>
+                  {Math.round(window.usedPercent)}% of a limit used
+                </span>
+              )}
+              <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+                {l.places.map(({ device, owner }) => (
+                  <span key={device.id} className={`chip ${l.places.length > 1 ? "chip-warn" : ""}`} title={ws.team ? owner.email : undefined}>
+                    <Icon name="monitor" size={11} />
+                    {device.name}
+                  </span>
+                ))}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      {shared > 0 && (
+        <p className="border-t border-line px-4 py-2 text-[11px] text-faint">
+          One account on several computers shares its 5-hour and weekly limits between them: what each computer uses counts against the same limits.
+        </p>
+      )}
+    </Card>
   );
 }
 
@@ -80,6 +169,7 @@ type CardProps = Props & { device: Device; ownerEmail: string };
 
 function DeviceCard({ ws, sessions, device: d, ownerEmail, period, now, reload, flash, onNewChat, onShowSessions }: CardProps) {
   const [busy, setBusy] = useState(false);
+  const [naming, setNaming] = useState<string | null>(null);
   const theirs = sessions.filter((s) => s.device.id === d.id);
   const live = theirs.filter((s) => s.active).length;
   const projects = d.activity?.projects ?? [];
@@ -91,6 +181,15 @@ function DeviceCard({ ws, sessions, device: d, ownerEmail, period, now, reload, 
     .slice(0, 3);
   const own = d.userId === ws.me.id;
   const why = unavailable(d);
+
+  async function saveName() {
+    const label = naming?.trim() ?? "";
+    setNaming(null);
+    if (label === (d.label ?? "")) return;
+    const res = await renameDevice(d.id, label);
+    if (!res.ok) return flash(res.error);
+    await reload();
+  }
 
   async function remove() {
     if (!window.confirm(`Remove ${d.name}? Its remote sessions go with it. If AI Cooldown still runs there, it just stops being connected.`)) return;
@@ -110,10 +209,33 @@ function DeviceCard({ ws, sessions, device: d, ownerEmail, period, now, reload, 
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="truncate text-base font-semibold text-fg">{d.name}</h3>
+            {naming !== null ? (
+              <input
+                autoFocus
+                value={naming}
+                maxLength={60}
+                placeholder={d.hostname}
+                onChange={(e) => setNaming(e.target.value)}
+                onBlur={() => void saveName()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void saveName();
+                  if (e.key === "Escape") setNaming(null);
+                }}
+                aria-label="Name this computer"
+                className="min-w-0 flex-1 border-b border-muted bg-transparent text-base font-semibold text-fg focus:outline-none"
+              />
+            ) : own ? (
+              <button type="button" onClick={() => setNaming(d.label ?? "")} className="group flex min-w-0 items-center gap-2 text-left" title="Name it">
+                <h3 className="truncate text-base font-semibold text-fg">{d.name}</h3>
+                <span className="shrink-0 text-[11px] text-faint opacity-0 transition-opacity group-hover:opacity-100">rename</span>
+              </button>
+            ) : (
+              <h3 className="truncate text-base font-semibold text-fg">{d.name}</h3>
+            )}
             <OnlineDot online={d.online} lastSeenAt={d.lastSeenAt} now={now} />
           </div>
           <p className="truncate font-mono text-[11px] text-muted">
+            {d.label ? `${d.hostname} · ` : ""}
             {d.os} · {d.arch} · AI Cooldown {d.version}
           </p>
           {ws.team && (

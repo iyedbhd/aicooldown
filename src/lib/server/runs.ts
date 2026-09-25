@@ -21,7 +21,7 @@ import {
 import type { User } from "./auth";
 import { decrypt, encrypt, newId, openJson, sealJson } from "./crypto";
 import { db, ensureSchema, placeholders } from "./db";
-import { deviceById, heatDevice, isOnline, type DeviceRecord } from "./devices";
+import { deviceById, deviceName, heatDevice, isOnline, type DeviceRecord } from "./devices";
 import { RequestError } from "./request-error";
 import { accessTo, showsWork } from "./sharing";
 import { seesRun } from "./teams";
@@ -54,7 +54,7 @@ const FINISHED: RunStatus[] = ["done", "failed", "cancelled"];
 
 type Row = Record<string, unknown>;
 
-const SELECT = `SELECT r.*, d.info AS device_info, d.user_id AS device_user, u.email AS by_email
+const SELECT = `SELECT r.*, d.info AS device_info, d.label AS device_label, d.user_id AS device_user, u.email AS by_email
   FROM runs r JOIN devices d ON d.id = r.device_id LEFT JOIN users u ON u.id = r.created_by`;
 
 const opt = (v: unknown) => (v === null || v === undefined ? null : Number(v));
@@ -64,7 +64,7 @@ function toRun(r: Row): Run {
     id: String(r.id),
     tool: String(r.tool) as Tool,
     deviceId: String(r.device_id),
-    deviceName: String(openJson<{ name?: string }>(String(r.device_info)).name ?? "computer"),
+    deviceName: r.device_label ? decrypt(String(r.device_label)) : String(openJson<{ name?: string }>(String(r.device_info)).name ?? "computer"),
     by: r.by_email === null ? null : String(r.by_email),
     project: String(r.project),
     prompt: decrypt(String(r.prompt)),
@@ -145,7 +145,7 @@ export async function createRun(viewer: User, raw: Record<string, unknown>): Pro
   const device = typeof raw.deviceId === "string" ? await deviceById(raw.deviceId) : null;
   const grant = device && (await accessTo(viewer.id, device.userId));
   if (!device || !grant) throw new RequestError(404, "Computer not found.");
-  const name = device.info.name;
+  const name = deviceName(device);
   const prompt = typeof raw.prompt === "string" ? raw.prompt.trim() : "";
   if (!prompt) throw new RequestError(400, "Write what Claude should do.");
   if (prompt.length > MAX_PROMPT) throw new RequestError(400, `Keep the prompt under ${MAX_PROMPT.toLocaleString("en-US")} characters.`);

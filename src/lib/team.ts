@@ -158,6 +158,12 @@ export type Command = { id: string; kind: CommandKind; label: string; status: "q
 export type Device = DeviceInfo & {
   id: string;
   userId: string;
+  /** The name it goes by: its owner's for it, or else its host name. */
+  name: string;
+  /** Its host name, as the computer reports it. */
+  hostname: string;
+  /** The name its owner gave it, if any. */
+  label: string | null;
   createdAt: number;
   lastSeenAt: number;
   online: boolean;
@@ -216,9 +222,33 @@ export type Run = {
 /** A session as the computer receives it to run. */
 export type RunJob = { id: string; tool: Tool; project: string; prompt: string; mode: RemoteLevel; model: string | null; resume: string | null; by: string | null };
 
-export type RunEventKind = "user" | "text" | "tool" | "output" | "error" | "info" | "result";
+export type RunEventKind = "user" | "text" | "tool" | "output" | "error" | "info" | "result" | "image";
 
+/** One step of a conversation. An "image" step's text is an ImageRef, as JSON: the picture itself comes on request. */
 export type RunEvent = { seq: number; at: number; kind: RunEventKind; text: string };
+
+/** The kinds of picture a session's images may be: what a browser shows safely, never SVG. */
+export const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+export type ImageType = (typeof IMAGE_TYPES)[number];
+
+/** The largest image a computer sends; a bigger one says how big it is instead. */
+export const MAX_IMAGE_BYTES = 2_000_000;
+
+/** An image in a session's log: which one it is there (from 0, in the order the log has them), its kind and size, and whether it was pasted with a prompt or came from a tool. */
+export type ImageRef = { n: number; type: ImageType; bytes: number; by: "user" | "tool" };
+
+export function parseImageRef(text: string): ImageRef | null {
+  try {
+    const v = JSON.parse(text) as Partial<ImageRef>;
+    const ok = Number.isInteger(v.n) && v.n! >= 0 && IMAGE_TYPES.includes(v.type as ImageType) && typeof v.bytes === "number" && (v.by === "user" || v.by === "tool");
+    return ok ? (v as ImageRef) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Where an image of a session stands: not asked for (or no longer kept), asked for, here, or not to be had. */
+export type ImageState = { n: number; status: "none" | "pending" | "ready" | "failed"; error: string | null };
 
 export const RUN_FINISHED: RunStatus[] = ["done", "failed", "cancelled"];
 
@@ -299,6 +329,8 @@ export const revokeInvite = (teamId: string, inviteId: string) => requestJson(`/
 export const previewInvite = (token: string) => requestJson<InvitePreview>(`/api/invites/${encodeURIComponent(token)}`);
 export const acceptInvite = (token: string) => requestJson<{ teamId: string }>(`/api/invites/${encodeURIComponent(token)}`, { method: "POST", body: {} });
 export const removeDevice = (deviceId: string) => requestJson("/api/devices", { method: "DELETE", body: { deviceId } });
+/** Names one of your computers ("Work laptop"); an empty name goes back to its host name. */
+export const renameDevice = (deviceId: string, label: string) => requestJson("/api/devices", { method: "PATCH", body: { deviceId, label } });
 /** Shares everything or what you pick, or shares or stops sharing a project (by name) or one session (by sessionKey). */
 export type SharingChange = { all: boolean } | { project: string; shared: boolean } | { session: string; shared: boolean };
 export const changeSharing = (change: SharingChange) => requestJson<{ sharing: SharePolicy }>("/api/sharing", { method: "POST", body: change });
@@ -312,5 +344,13 @@ export const heatDevice = (deviceId: string) => requestJson("/api/devices/heat",
 /** Asks the session's computer for its transcript; `refresh` asks again for one already fetched. */
 export const requestTranscript = (deviceId: string, tool: Tool, sessionId: string, refresh: boolean) =>
   requestJson<Transcript>("/api/sessions", { method: "POST", body: { deviceId, tool, sessionId, refresh } });
+/** Asks the session's computer for some of its images (by ImageRef.n); says where each stands. */
+export const requestImages = (deviceId: string, tool: Tool, sessionId: string, n: number[], retry = false) =>
+  requestJson<{ images: ImageState[] }>("/api/sessions/images", { method: "POST", body: { deviceId, tool, sessionId, n, retry } });
+/** Where these images stand, without asking for any. */
+export const fetchImageStates = (deviceId: string, tool: Tool, sessionId: string, n: number[]) =>
+  requestJson<{ images: ImageState[] }>(`/api/sessions/images?${new URLSearchParams({ deviceId, tool, sessionId, n: n.join(",") })}`);
+/** An image the computer sent, to show as it is. */
+export const imageUrl = (deviceId: string, tool: Tool, sessionId: string, n: number) => `/api/sessions/image?${new URLSearchParams({ deviceId, tool, sessionId, n: String(n) })}`;
 export const fetchTranscript = (deviceId: string, tool: Tool, sessionId: string) =>
   requestJson<Transcript | null>(`/api/sessions?${new URLSearchParams({ deviceId, tool, sessionId })}`);

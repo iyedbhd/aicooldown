@@ -29,6 +29,64 @@ type Props = {
 const PAGE = 50;
 const control = "rounded-lg border border-line bg-panel-2 px-2 py-1 text-xs text-fg";
 
+/** How the list reads: one list, most recent first, or grouped by day (what happened when), project, person or computer. */
+type Grouping = "list" | "day" | "project" | "person" | "computer";
+
+const GROUPINGS: { id: Grouping; label: string; team?: boolean }[] = [
+  { id: "list", label: "List" },
+  { id: "day", label: "By day" },
+  { id: "project", label: "By project" },
+  { id: "person", label: "By person", team: true },
+  { id: "computer", label: "By computer" },
+];
+
+/** The grouping last picked, per browser. */
+const GROUP_KEY = "aic:sessions-group";
+/** Sessions a group shows before "all of them". */
+const GROUP_PAGE = 5;
+
+function storedGrouping(): Grouping {
+  try {
+    const v = localStorage.getItem(GROUP_KEY);
+    return GROUPINGS.some((g) => g.id === v) ? (v as Grouping) : "list";
+  } catch {
+    return "list";
+  }
+}
+
+type Group = { key: string; label: string; detail: string | null; sessions: SessionRow[]; tokens: number; cost: number; live: number; lastActive: number };
+
+/** A day as people say it: today, yesterday, or its name and date. */
+function dayName(t: number, now: number): string {
+  const day = new Date(t).toDateString();
+  if (day === new Date(now).toDateString()) return "Today";
+  if (day === new Date(now - 86400_000).toDateString()) return "Yesterday";
+  return new Date(t).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+}
+
+/** The sessions in groups, each with its totals: days newest first, the rest most recently active first. */
+function groupSessions(sessions: SessionRow[], by: Grouping, now: number, team: boolean): Group[] {
+  const groups = new Map<string, Group>();
+  for (const s of sessions) {
+    const [key, label, detail] =
+      by === "day"
+        ? [new Date(s.lastActive).toDateString(), dayName(s.lastActive, now), null]
+        : by === "project"
+          ? [s.project, s.project, null]
+          : by === "person"
+            ? [s.member.id, s.member.email, null]
+            : [s.device.id, s.device.name, team ? s.member.email : null];
+    const g = groups.get(key) ?? { key, label, detail, sessions: [], tokens: 0, cost: 0, live: 0, lastActive: 0 };
+    g.sessions.push(s);
+    g.tokens += s.totals.tokens;
+    g.cost += s.totals.cost;
+    g.live += s.active ? 1 : 0;
+    g.lastActive = Math.max(g.lastActive, s.lastActive);
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((a, b) => b.lastActive - a.lastActive);
+}
+
 function matches(s: SessionRow, f: SessionFilter, needle: string): boolean {
   return (
     (f.person === "all" || s.member.id === f.person) &&
@@ -47,10 +105,22 @@ function matches(s: SessionRow, f: SessionFilter, needle: string): boolean {
  */
 export function TeamSessions({ ws, sessions, now, filter, onFilter, onNewChat, onOpenRun, onOpenSession }: Props) {
   const [shown, setShown] = useState(PAGE);
+  const [grouping, setGrouping] = useState<Grouping>(storedGrouping);
+  /** The groups showing all of their sessions. */
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const set = (patch: Partial<SessionFilter>) => {
     onFilter({ ...filter, ...patch });
     setShown(PAGE);
   };
+  function pickGrouping(next: Grouping) {
+    setGrouping(next);
+    setExpanded(new Set());
+    try {
+      localStorage.setItem(GROUP_KEY, next);
+    } catch {
+      /* remembering it is a nicety */
+    }
+  }
 
   const live = liveNow(ws, sessions);
   const needle = filter.search.trim().toLowerCase();
@@ -61,6 +131,8 @@ export function TeamSessions({ ws, sessions, now, filter, onFilter, onNewChat, o
   const filtering = JSON.stringify(filter) !== JSON.stringify(NO_FILTER);
   const privateComputers = devices.filter((d) => d.share === "off").length;
   const team = Boolean(ws.team);
+  const by = grouping === "person" && !team ? "list" : grouping;
+  const groups = by === "list" ? null : groupSessions(filtered, by, now, team);
 
   return (
     <div className="space-y-6">
@@ -100,6 +172,20 @@ export function TeamSessions({ ws, sessions, now, filter, onFilter, onNewChat, o
         action={<span className="font-mono text-[11px] text-faint">last 30 days</span>}
       >
         <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
+          <div role="radiogroup" aria-label="Group sessions" className="flex max-w-full gap-0.5 overflow-x-auto rounded-lg border border-line bg-panel-2 p-0.5">
+            {GROUPINGS.filter((g) => team || !g.team).map((g) => (
+              <button
+                key={g.id}
+                type="button"
+                role="radio"
+                aria-checked={by === g.id}
+                onClick={() => pickGrouping(g.id)}
+                className={`shrink-0 rounded-md px-2 py-0.5 text-xs transition ${by === g.id ? "bg-panel-3 text-fg" : "text-muted hover:text-fg-2"}`}
+              >
+                {g.label}
+              </button>
+            ))}
+          </div>
           {team && (people.length > 1 || filter.person !== "all") && (
             <select value={filter.person} onChange={(e) => set({ person: e.target.value })} aria-label="Person" className={control}>
               <option value="all">Everyone</option>
@@ -168,6 +254,42 @@ export function TeamSessions({ ws, sessions, now, filter, onFilter, onNewChat, o
                 ? "No sessions reported yet. They come from the connected computers' Claude Code and Codex logs."
                 : "No computers connected yet. Sessions come from the Claude Code and Codex logs of the connected computers."}
           </Empty>
+        ) : groups ? (
+          <div className="divide-y divide-line">
+            {groups.map((g) => {
+              const all = expanded.has(g.key);
+              return (
+                <section key={g.key}>
+                  <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 bg-panel-2/60 px-4 py-2">
+                    <span className="flex min-w-0 items-center gap-2">
+                      {by === "person" && <Avatar email={g.label} size={18} />}
+                      <span className="truncate text-sm font-medium text-fg-2">{g.label}</span>
+                      {g.detail && <span className="truncate font-mono text-[11px] text-faint">{g.detail}</span>}
+                    </span>
+                    <span className="font-mono text-[11px] text-muted">
+                      {g.live > 0 && <span className="text-emerald-600 dark:text-emerald-400">{g.live} live · </span>}
+                      {g.sessions.length} session{g.sessions.length === 1 ? "" : "s"} · {formatTokens(g.tokens)}
+                      {g.cost > 0 ? ` · ≈ ${formatMoney(g.cost)}` : ""}
+                    </span>
+                  </header>
+                  <ul className="divide-y divide-line">
+                    {(all ? g.sessions : g.sessions.slice(0, GROUP_PAGE)).map((s) => (
+                      <SessionLine key={s.key} s={s} showMember={team && by !== "person"} now={now} onOpen={() => onOpenSession(s.key)} />
+                    ))}
+                  </ul>
+                  {g.sessions.length > GROUP_PAGE && (
+                    <button
+                      type="button"
+                      onClick={() => setExpanded((prev) => new Set(all ? [...prev].filter((k) => k !== g.key) : [...prev, g.key]))}
+                      className="w-full border-t border-line px-4 py-1.5 text-left text-[11px] text-muted hover:text-fg"
+                    >
+                      {all ? "Fewer" : `All ${g.sessions.length}`}
+                    </button>
+                  )}
+                </section>
+              );
+            })}
+          </div>
         ) : (
           <ul className="divide-y divide-line">
             {filtered.slice(0, shown).map((s) => (
@@ -175,7 +297,7 @@ export function TeamSessions({ ws, sessions, now, filter, onFilter, onNewChat, o
             ))}
           </ul>
         )}
-        {filtered.length > shown && (
+        {!groups && filtered.length > shown && (
           <div className="border-t border-line px-4 py-2 text-center">
             <button type="button" onClick={() => setShown((n) => n + PAGE)} className="btn">
               Show {Math.min(PAGE, filtered.length - shown)} more
@@ -210,7 +332,7 @@ export function RunLine({ run: r, team, now, onOpen }: { run: Run; team: boolean
           {r.resume && <Icon name="refresh" size={11} className="mr-1 inline text-faint" />}
           {r.prompt}
         </span>
-        <span className="shrink-0 font-mono text-[11px] text-muted">
+        <span className="min-w-0 max-w-full truncate font-mono text-[11px] text-muted sm:shrink-0">
           {r.deviceName} · {r.project.split("/").pop()} · {REMOTE_LABEL[r.mode].toLowerCase()}
           {team ? ` · ${r.by ?? "deleted account"}` : ""} · {formatAgo(now - r.createdAt)}
           {r.result?.costUsd !== undefined ? ` · ${formatMoney(r.result.costUsd)}` : ""}

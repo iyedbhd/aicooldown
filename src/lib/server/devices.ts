@@ -1,7 +1,7 @@
 import type { DeviceActivity, ModelUsage, ProjectActivity, SessionActivity, TokenRow } from "../activity";
 import type { CliProfile, HelloRun, HelloSchedule, ScheduleMode } from "../local";
 import { MODEL_NAME, REMOTE_LEVELS, SESSION_ID, SHARE_NOTHING, type Device, type DeviceInfo, type DeviceManage, type RemoteLevel, type SharePolicy, type ShareLevel, type ToolState } from "../team";
-import { newId, openJson, randomToken, sealJson, sha256 } from "./crypto";
+import { decrypt, encrypt, newId, openJson, randomToken, sealJson, sha256 } from "./crypto";
 import { db, ensureSchema, placeholders } from "./db";
 import { RequestError } from "./request-error";
 import { forgetDevice, visibleActivity } from "./sharing";
@@ -31,6 +31,8 @@ export type DeviceRecord = {
   id: string;
   userId: string;
   info: DeviceInfo;
+  /** The name its owner gave it, if any: see deviceName. */
+  label: string | null;
   /** Its saved logins and scheduled hellos, for its owner. */
   manage: DeviceManage | null;
   lastSeenAt: number;
@@ -49,6 +51,7 @@ function toRecord(r: Row): DeviceRecord {
     id: String(r.id),
     userId: String(r.user_id),
     info,
+    label: r.label ? decrypt(String(r.label)) : null,
     manage: parseManage(report.manage),
     lastSeenAt: Number(r.last_seen_at),
     hotUntil: Number(r.hot_until ?? 0),
@@ -60,6 +63,19 @@ function toRecord(r: Row): DeviceRecord {
 }
 
 export const isOnline = (d: DeviceRecord, now = Date.now()) => d.connected && now - d.lastSeenAt < ONLINE_MS;
+
+/** What a computer is called: the name its owner gave it, or else its host name. */
+export const deviceName = (d: DeviceRecord) => d.label ?? d.info.name;
+
+const MAX_LABEL = 60;
+
+/** Names one of the user's computers; an empty name goes back to its host name. */
+export async function renameDevice(userId: string, id: string, raw: unknown): Promise<void> {
+  const label = typeof raw === "string" ? raw.trim().slice(0, MAX_LABEL) : "";
+  await ensureSchema();
+  const res = await db().execute({ sql: "UPDATE devices SET label = ? WHERE id = ? AND user_id = ?", args: [label ? encrypt(label) : null, id, userId] });
+  if (res.rowsAffected === 0) throw new RequestError(404, "Computer not found.");
+}
 
 const text = (v: unknown, max: number): string => (typeof v === "string" ? v.slice(0, max) : "");
 const count = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0);
@@ -285,6 +301,9 @@ export async function listDevices(userIds: string[], viewerId: string, grants: M
     const activity = d.activity && visibleActivity(d.activity, grants.get(d.userId) ?? SHARE_NOTHING, d.id);
     return {
       ...d.info,
+      name: deviceName(d),
+      hostname: d.info.name,
+      label: d.label,
       id: d.id,
       userId: d.userId,
       createdAt: d.createdAt,
@@ -308,6 +327,7 @@ export async function removeDevice(userId: string, id: string): Promise<void> {
       { sql: "DELETE FROM run_events WHERE run_id IN (SELECT id FROM runs WHERE device_id = ?)", args: [id] },
       { sql: "DELETE FROM runs WHERE device_id = ?", args: [id] },
       { sql: "DELETE FROM session_transcripts WHERE device_id = ?", args: [id] },
+      { sql: "DELETE FROM session_images WHERE device_id = ?", args: [id] },
       { sql: "DELETE FROM device_commands WHERE device_id = ?", args: [id] },
       { sql: "DELETE FROM devices WHERE id = ?", args: [id] },
     ],

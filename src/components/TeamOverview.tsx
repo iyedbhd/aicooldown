@@ -26,6 +26,58 @@ type Props = {
 /** Live sessions shown here before "all sessions". */
 const LIVE_SHOWN = 6;
 
+/**
+ * Who is on what, for whoever runs the team: each person's latest session
+ * (live, or when), its project and title and the computer it is on, most
+ * recently active first. A tap opens it.
+ */
+function PeopleNow({ ws, sessions, now, onOpenSession }: { ws: Workspace; sessions: SessionRow[]; now: number; onOpenSession: (key: string) => void }) {
+  const rows = ws.members
+    .filter((m) => m.detailed)
+    .map((m) => {
+      const theirs = sessions.filter((s) => s.member.id === m.id);
+      return { m, latest: theirs[0], live: theirs.filter((s) => s.active).length, online: m.devices.filter((d) => d.online).length };
+    })
+    .sort((a, b) => (b.latest?.lastActive ?? 0) - (a.latest?.lastActive ?? 0));
+  return (
+    <Card title="Who is on what">
+      <ul className="divide-y divide-line">
+        {rows.map(({ m, latest, live, online }) => (
+          <li key={m.id}>
+            <button
+              type="button"
+              disabled={!latest}
+              onClick={() => latest && onOpenSession(latest.key)}
+              className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-left hover:bg-panel-2 disabled:hover:bg-transparent"
+            >
+              <span className="flex min-w-0 flex-1 basis-60 items-center gap-3">
+                <Avatar email={m.email} size={24} />
+                <span className="min-w-0">
+                  <span className="block truncate text-sm text-fg">{m.email}</span>
+                  <span className="block truncate font-mono text-[11px] text-muted">
+                    {latest ? `${latest.project}${latest.title ? ` · ${latest.title}` : ""}` : m.devices.length ? "no sessions in the last 30 days" : "no computer connected"}
+                  </span>
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-3 font-mono text-[11px]">
+                {latest && <span className="hidden max-w-40 truncate text-muted sm:inline">{latest.device.name}</span>}
+                {live > 0 ? (
+                  <span className="chip chip-good">
+                    <span className="live h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
+                    {live} live
+                  </span>
+                ) : (
+                  <span className="text-muted">{latest ? formatAgo(now - latest.lastActive) : `${online}/${m.devices.length} online`}</span>
+                )}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
 /** The team at a glance: what runs now, people and computers, tokens and what they are worth, subscriptions, what needs attention. */
 export function TeamOverview({ ws, sessions, period, now, onOpenRun, onOpenSession, onShowSessions, onShowComputers }: Props) {
   const days = lastDays(period, now);
@@ -94,6 +146,8 @@ export function TeamOverview({ ws, sessions, period, now, onOpenRun, onOpenSessi
         </div>
       </Card>
 
+      {ws.team && manages(ws.role) && visible.length > 1 && <PeopleNow ws={ws} sessions={sessions} now={now} onOpenSession={onOpenSession} />}
+
       {liveCount > 0 && (
         <Card
           title={`Live now · ${liveCount}`}
@@ -119,7 +173,7 @@ export function TeamOverview({ ws, sessions, period, now, onOpenRun, onOpenSessi
         </Card>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2 [&>*]:min-w-0">
         <Card title="Limits running out">
           {alerts.length === 0 ? (
             <Empty>{accounts.length ? "Every linked account has room left." : "No linked accounts yet. They come from the dashboard's Add account."}</Empty>

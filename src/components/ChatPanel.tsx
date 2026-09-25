@@ -16,6 +16,7 @@ import {
   manages,
   mayRunOn,
   MAX_PROMPT,
+  parseImageRef,
   projectShared,
   REMOTE_HELP,
   REMOTE_LABEL,
@@ -27,6 +28,7 @@ import {
   TOOL_NAME,
   unavailable,
   type Device,
+  type ImageRef,
   type RemoteLevel,
   type Run,
   type RunEvent,
@@ -37,6 +39,7 @@ import {
 import { sourceLabel, type SessionRow } from "@/lib/team-stats";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
+import { ImageGallery, ImageProvider, Lightbox, SessionImage, useImageLoader } from "./SessionImages";
 import { ShareButton, StatusChip } from "./TeamBits";
 
 /** What the chat opens on: one of the sessions the computers reported, a remote session, or a new conversation. */
@@ -51,6 +54,35 @@ const TRANSCRIPT_POLL_MS = 2_000;
 const HEAT_MS = 60_000;
 
 const field = "rounded-lg border border-line bg-panel-2 px-2.5 py-1.5 text-xs text-fg focus:border-muted focus:outline-none";
+
+/**
+ * How a conversation reads: as a chat; compact, only what was asked and
+ * answered (and its images), for a quick look on a phone; verbose, every step
+ * in full with its time; or just its images.
+ */
+export type ChatView = "chat" | "compact" | "verbose" | "images";
+
+const VIEWS: { id: ChatView; label: string; title: string }[] = [
+  { id: "chat", label: "Chat", title: "Prompts, replies, tool calls and their output" },
+  { id: "compact", label: "Compact", title: "Only what was asked and answered" },
+  { id: "verbose", label: "Verbose", title: "Every step in full, with its time" },
+  { id: "images", label: "Images", title: "The images pasted with prompts or returned by tools" },
+];
+
+/** The view last picked, per browser. */
+const VIEW_KEY = "aic:chat-view";
+
+function storedView(): ChatView {
+  try {
+    const v = localStorage.getItem(VIEW_KEY);
+    return VIEWS.some((x) => x.id === v) ? (v as ChatView) : "chat";
+  } catch {
+    return "chat";
+  }
+}
+
+/** What the compact view keeps. */
+const COMPACT = new Set<RunEvent["kind"]>(["user", "text", "result", "error", "image"]);
 
 const allDevices = (ws: Workspace) => ws.members.flatMap((m) => m.devices);
 
@@ -135,6 +167,9 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
   const [error, setError] = useState<string | null>(null);
   const [details, setDetails] = useState(false);
   const [sharingBusy, setSharingBusy] = useState(false);
+  const [view, setView] = useState<ChatView>(storedView);
+  /** The image open large, by its number in the session. */
+  const [viewing, setViewing] = useState<number | null>(null);
   const seqs = useRef<Record<string, number>>({});
   const statuses = useRef<Record<string, string>>({});
   const scroller = useRef<HTMLDivElement>(null);
@@ -161,6 +196,20 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
   const session = sessionId ? sessions.find((s) => s.device.id === deviceId && s.tool === tool && s.id === sessionId) : undefined;
   const active = runs.find((r) => !RUN_FINISHED.includes(r.status));
   const last = runs[runs.length - 1];
+  const images = useImageLoader(deviceId, tool, sessionId, device?.name ?? "the computer", setViewing);
+  const imageRefs = useMemo(
+    () => (transcript?.events ?? []).filter((e) => e.kind === "image").flatMap((e) => parseImageRef(e.text) ?? []) as ImageRef[],
+    [transcript],
+  );
+
+  function pickView(next: ChatView) {
+    setView(next);
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      /* remembering it is a nicety */
+    }
+  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && !box.current?.value && onClose();
@@ -366,9 +415,42 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
           </div>
           {details && session && <SessionDetails s={session} now={now} />}
           {!thread && <NewChatFields ws={ws} usable={usable} draft={draft} setDraft={setDraft} />}
+          {thread && (
+            <div role="tablist" aria-label="How it reads" className="-mb-1 mt-2.5 flex gap-0.5 overflow-x-auto">
+              {VIEWS.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={view === v.id}
+                  title={v.title}
+                  onClick={() => pickView(v.id)}
+                  className={`shrink-0 rounded-md px-2.5 py-1 text-[12px] transition ${view === v.id ? "bg-panel-3 text-fg" : "text-muted hover:text-fg-2"}`}
+                >
+                  {v.label}
+                  {v.id === "images" && imageRefs.length > 0 && <span className="ml-1 font-mono text-[10px] text-faint">{imageRefs.length}</span>}
+                </button>
+              ))}
+            </div>
+          )}
         </header>
 
+        <ImageProvider value={images}>
         <div ref={scroller} className="flex-1 space-y-2.5 overflow-y-auto px-4 py-4 sm:px-5" aria-live="polite">
+          {view === "images" ? (
+            readable ? (
+              transcript ? (
+                <ImageGallery images={imageRefs} />
+              ) : (
+                <p className="font-mono text-[11px] text-faint">asking {device?.name} for the conversation…</p>
+              )
+            ) : (
+              <p className="text-[12px] text-faint">
+                {session ? `The images stay on ${device?.name ?? "the computer"} with the rest of what its sessions say.` : "Images show here once the conversation has some."}
+              </p>
+            )
+          ) : (
+          <>
           {sessionId && !readable && session && (
             <p className="text-[12px] text-faint">
               What was said before stays on {device?.name ?? "the computer"}: it keeps what its sessions say to itself. Messages sent from here show below.
@@ -376,7 +458,7 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
           )}
           {readable && !transcript && <p className="font-mono text-[11px] text-faint">asking {device?.name} for the conversation…</p>}
           {transcript?.events.map((e) => (
-            <EventLine key={`t${e.seq}`} event={e} />
+            <EventLine key={`t${e.seq}`} event={e} view={view} />
           ))}
           {transcript?.status === "pending" && (
             <p className="flex items-center gap-2 font-mono text-[11px] text-faint">
@@ -390,14 +472,18 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
             </button>
           )}
           {shownRuns.map((r) => (
-            <RunBlock key={r.id} run={r} events={events[r.id] ?? []} team={Boolean(ws.team)} now={now} />
+            <RunBlock key={r.id} run={r} events={events[r.id] ?? []} team={Boolean(ws.team)} now={now} view={view} />
           ))}
           {!thread && runs.length === 0 && (
             <p className="text-sm text-muted">
               Pick a computer, a CLI and a project above, then say what to do. The conversation continues here: send the next message when the reply is in.
             </p>
           )}
+          </>
+          )}
         </div>
+        {viewing !== null && <Lightbox images={imageRefs} n={viewing} onMove={setViewing} onClose={() => setViewing(null)} />}
+        </ImageProvider>
 
         <footer className="border-t border-line px-4 py-3 sm:px-5">
           {session?.active && !active && !blocked && (
@@ -527,7 +613,7 @@ function withoutEcho(events: RunEvent[]): RunEvent[] {
 }
 
 /** A message sent from here and what came back: the prompt, the reply as it streams, and how it ended. */
-function RunBlock({ run: r, events, team, now }: { run: Run; events: RunEvent[]; team: boolean; now: number }) {
+function RunBlock({ run: r, events, team, now, view }: { run: Run; events: RunEvent[]; team: boolean; now: number; view: ChatView }) {
   const took = r.startedAt ? (r.finishedAt ?? now) - r.startedAt : null;
   return (
     <div className="space-y-2.5">
@@ -541,7 +627,7 @@ function RunBlock({ run: r, events, team, now }: { run: Run; events: RunEvent[];
       </div>
       {r.status === "queued" && <p className="font-mono text-[11px] text-muted">waiting for {r.deviceName} to pick it up…</p>}
       {withoutEcho(events).map((e) => (
-        <EventLine key={e.seq} event={e} />
+        <EventLine key={e.seq} event={e} view={view} />
       ))}
       {r.status === "running" && (
         <p className="flex items-center gap-2 font-mono text-[11px] text-faint">
@@ -602,17 +688,36 @@ const EVENT_STYLE: Record<RunEvent["kind"], string> = {
   output: "max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-panel-2 px-3 py-2 font-mono text-[11px] text-muted",
   error: "whitespace-pre-wrap rounded-md bg-rose-500/10 px-3 py-2 font-mono text-[12px] text-rose-700 dark:text-rose-200",
   info: "font-mono text-[11px] text-faint",
+  image: "",
 };
 
-/** One step of a conversation: a prompt, what the model said, a tool call and its output, or a note. */
-export function EventLine({ event }: { event: RunEvent }) {
-  if (event.kind === "tool") {
-    return (
-      <div className={EVENT_STYLE.tool}>
-        <Icon name="terminal" size={12} className="mt-0.5 shrink-0 text-faint" />
-        <span className="break-all">{event.text}</span>
-      </div>
-    );
-  }
-  return <div className={EVENT_STYLE[event.kind]}>{event.text}</div>;
+/** One step of a conversation, as `view` shows it: a prompt, what the model said, a tool call and its output, an image, or a note. */
+export function EventLine({ event, view = "chat" }: { event: RunEvent; view?: ChatView }) {
+  if (view === "compact" && !COMPACT.has(event.kind)) return null;
+  const line = (() => {
+    if (event.kind === "image") {
+      const image = parseImageRef(event.text);
+      return image ? <SessionImage image={image} /> : null;
+    }
+    if (event.kind === "tool") {
+      return (
+        <div className={EVENT_STYLE.tool}>
+          <Icon name="terminal" size={12} className="mt-0.5 shrink-0 text-faint" />
+          <span className="break-all">{event.text}</span>
+        </div>
+      );
+    }
+    // Verbose shows a tool's output whole, not in a box that scrolls.
+    const style = view === "verbose" && event.kind === "output" ? EVENT_STYLE.output.replace("max-h-40 overflow-auto", "overflow-x-auto") : EVENT_STYLE[event.kind];
+    return <div className={style}>{event.text}</div>;
+  })();
+  if (view !== "verbose" || !event.at) return line;
+  return (
+    <div className="space-y-0.5">
+      <p className={`font-mono text-[10px] text-faint ${event.kind === "user" ? "text-right" : ""}`}>
+        {new Date(event.at).toLocaleTimeString()} · {event.kind}
+      </p>
+      {line}
+    </div>
+  );
 }

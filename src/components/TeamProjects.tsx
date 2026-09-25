@@ -4,26 +4,32 @@ import { useState } from "react";
 import { formatTokens, lastDays } from "@/lib/activity";
 import { formatAgo, formatMoney } from "@/lib/format";
 import { manages, projectShared, type SharingChange, type Workspace } from "@/lib/team";
-import { rollupProjects, type Period } from "@/lib/team-stats";
+import { rollupProjects, type Period, type SessionRow } from "@/lib/team-stats";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
 import { Avatar, Card, Empty, ShareButton } from "./TeamBits";
-import type { SessionFilter } from "./TeamSessions";
+import { SessionLine, type SessionFilter } from "./TeamSessions";
 
 type Props = {
   ws: Workspace;
+  sessions: SessionRow[];
   period: Period;
   now: number;
   onShowSessions: (only: Partial<SessionFilter>) => void;
+  onOpenSession: (key: string) => void;
   onShare: (change: SharingChange) => Promise<void>;
 };
 
+/** The latest sessions an open project shows. */
+const LATEST = 5;
+
 /**
  * What people work on: each project across everyone's computers, busiest
- * first. An owner or admin shares their own projects with the team's other
- * owners and admins from here, by name: on all of their computers.
+ * first, and opened, where and by whom and its latest sessions. An owner or
+ * admin shares their own projects with the team's other owners and admins
+ * from here, by name: on all of their computers.
  */
-export function TeamProjects({ ws, period, now, onShowSessions, onShare }: Props) {
+export function TeamProjects({ ws, sessions, period, now, onShowSessions, onOpenSession, onShare }: Props) {
   const [open, setOpen] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const sharing = ws.team && manages(ws.role) ? ws.sharing : null;
@@ -112,9 +118,24 @@ export function TeamProjects({ ws, period, now, onShowSessions, onShare }: Props
                         <span className="font-mono text-[11px] text-fg-2">{formatTokens(totals.tokens)}</span>
                       </li>
                     ))}
+                    {(() => {
+                      const theirs = sessions.filter((s) => s.project === p.name);
+                      return (
+                        theirs.length > 0 && (
+                          <li className="pt-1.5">
+                            <p className="eyebrow mb-1">latest sessions</p>
+                            <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-panel">
+                              {theirs.slice(0, LATEST).map((s) => (
+                                <SessionLine key={s.key} s={s} showMember={Boolean(ws.team)} now={now} onOpen={() => onOpenSession(s.key)} />
+                              ))}
+                            </ul>
+                          </li>
+                        )
+                      );
+                    })()}
                     <li>
                       <button type="button" onClick={() => onShowSessions({ project: p.name })} className="mt-1 text-xs text-muted hover:text-fg">
-                        Its sessions →
+                        All its sessions →
                       </button>
                     </li>
                   </ul>

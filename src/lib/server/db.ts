@@ -133,6 +133,20 @@ CREATE TABLE IF NOT EXISTS session_transcripts (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (device_id, tool, session_id)
 );
+CREATE TABLE IF NOT EXISTS session_images (
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  tool TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  n INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  type TEXT,
+  content TEXT,
+  error TEXT,
+  requested_by TEXT NOT NULL,
+  requested_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (device_id, tool, session_id, n)
+);
 CREATE TABLE IF NOT EXISTS sharing (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   policy TEXT NOT NULL,
@@ -144,7 +158,11 @@ CREATE TABLE IF NOT EXISTS sharing (
  * Columns added to a table after it first existed somewhere: each runs once
  * per database, and "duplicate column" means it already has.
  */
-const MIGRATIONS = ["ALTER TABLE runs ADD COLUMN tool TEXT NOT NULL DEFAULT 'claude'", "ALTER TABLE devices ADD COLUMN hot_until INTEGER NOT NULL DEFAULT 0"];
+const MIGRATIONS = [
+  "ALTER TABLE runs ADD COLUMN tool TEXT NOT NULL DEFAULT 'claude'",
+  "ALTER TABLE devices ADD COLUMN hot_until INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE devices ADD COLUMN label TEXT",
+];
 
 /**
  * Where the data lives: the libSQL server in the environment (TURSO_* are what

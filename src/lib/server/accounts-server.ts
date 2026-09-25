@@ -85,7 +85,7 @@ export async function forwardAccounts(req: Request, body?: unknown): Promise<Res
     return NextResponse.json({ error: `Could not reach ${new URL(origin).host} (${reason}).` }, { status: 502 });
   }
 
-  const out = new Headers({ "cache-control": "no-store" });
+  const out = new Headers({ "cache-control": "no-store", "x-content-type-options": "nosniff" });
   const resType = res.headers.get("content-type");
   if (resType) out.set("content-type", resType);
   for (const cookie of res.headers.getSetCookie()) {

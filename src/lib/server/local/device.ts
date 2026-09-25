@@ -10,6 +10,7 @@ import { SESSION_COOKIE } from "@/lib/server/cookies";
 import { DATA_DIR } from "@/lib/server/data-dir";
 import {
   levelAllows,
+  MAX_IMAGE_BYTES,
   MAX_PROMPT,
   MODEL_NAME,
   projectName,
@@ -31,7 +32,7 @@ import pkg from "../../../../package.json";
 import { scanActivity, type Scan } from "./activity";
 import { liveState, readLoginPath, toolState } from "./cli";
 import { runSession, type RunReport } from "./runner";
-import { readTranscript, type TranscriptEvent } from "./transcript";
+import { decodedBytes, readImages, readTranscript, type LoggedImage, type TranscriptEvent } from "./transcript";
 
 /*
  * This computer as a device of the AI Cooldown account signed in here, once
@@ -58,6 +59,8 @@ const SCAN_MS = 2 * 60_000;
 /** What a check-in says about the CLIs and saved logins is read again after this long, or after a change here. */
 const CLIS_MS = 10_000;
 const TIMEOUT_MS = 20_000;
+/** An image is up to a couple of megabytes: sending one may take longer on a slow line. */
+const IMAGE_TIMEOUT_MS = 90_000;
 const KEEP_RUNS = 20;
 
 type Link = { server: string; deviceId: string; token: string; userId: string; email: string };
@@ -73,6 +76,7 @@ type Stored = {
   runs: LocalRun[];
 };
 type TranscriptAsk = { tool: Tool; sessionId: string };
+type ImageAsk = { tool: Tool; sessionId: string; n: number };
 type CommandJob = { id: string; kind: CommandKind; args: Record<string, unknown>; by: string | null };
 type Clis = { logins: DeviceInfo["logins"]; tools: Record<Tool, ToolState>; manage: DeviceManage };
 
@@ -85,6 +89,8 @@ type Runtime = {
   error: string | null;
   /** The latest read of the session logs. */
   scan: (Scan & { at: number }) | null;
+  /** The read under way, if one is: check-ins do not wait for it, but for the first. */
+  scanning: Promise<void> | null;
   /** The activity report the server has last been sent, as sent. */
   reported: string | null;
   running: { run: LocalRun; stop: AbortController } | null;
@@ -107,6 +113,7 @@ const runtime = (g.__aicooldownDevice ??= {
   lastSync: null,
   error: null,
   scan: null,
+  scanning: null,
   reported: null,
   running: null,
   queue: Promise.resolve(),
@@ -217,14 +224,14 @@ function report(activity: DeviceActivity, share: ShareLevel): DeviceActivity {
   return share !== "off" ? activity : { ...activity, sessions: activity.sessions.map((s) => ({ ...s, title: null })) };
 }
 
-function agentFetch(link: Link, route: string, method: string, body?: unknown): Promise<Response> {
+function agentFetch(link: Link, route: string, method: string, body?: unknown, timeoutMs = TIMEOUT_MS): Promise<Response> {
   return fetch(link.server + route, {
     method,
     headers: { authorization: `Bearer ${link.token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
     redirect: "error",
     cache: "no-store",
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 }
 
@@ -270,7 +277,9 @@ async function sync(): Promise<void> {
   const stored = await load();
   const link = stored.link;
   if (!link) return;
-  if (!runtime.scan || Date.now() - runtime.scan.at > SCAN_MS) await rescan();
+  // The logs can be large: a check-in waits for the first read only, and later ones go on meanwhile.
+  if (!runtime.scan) await rescan();
+  else if (Date.now() - runtime.scan.at > SCAN_MS) void rescan();
   const activity = runtime.scan ? report(runtime.scan.activity, effectiveShare(stored)) : null;
   const outgoing = activity && JSON.stringify(activity);
   const sending = outgoing !== null && outgoing !== runtime.reported;
@@ -283,7 +292,15 @@ async function sync(): Promise<void> {
     runtime.error = "The account disconnected this computer. It connects again when you sign in here.";
     return;
   }
-  const json = (await res.json().catch(() => ({}))) as { sharing?: unknown; run?: RunJob | null; transcripts?: TranscriptAsk[]; commands?: CommandJob[]; pollMs?: number; error?: string };
+  const json = (await res.json().catch(() => ({}))) as {
+    sharing?: unknown;
+    run?: RunJob | null;
+    transcripts?: TranscriptAsk[];
+    images?: ImageAsk[];
+    commands?: CommandJob[];
+    pollMs?: number;
+    error?: string;
+  };
   if (!res.ok) throw new Error(json.error ?? `${new URL(link.server).host} answered ${res.status}`);
   runtime.lastSync = Date.now();
   runtime.error = null;
@@ -310,12 +327,71 @@ async function sync(): Promise<void> {
     runtime.commands = runtime.commands.catch(() => undefined).then(() => runCommand(link, job, stored.owner?.email ?? null));
   }
   for (const ask of (json.transcripts ?? []).slice(0, 3)) await answerTranscript(link, ask, share);
+  if (json.images?.length) await answerImages(link, json.images.slice(0, 6), share);
 }
 
-/** Reads the session logs again. A failed read keeps the last one: checking in matters more than the report. */
-async function rescan(): Promise<void> {
-  const fresh = await scanActivity().catch(() => null);
-  if (fresh) runtime.scan = { ...fresh, at: fresh.activity.scannedAt };
+/** Reads the session logs again, one read at a time. A failed read keeps the last one: checking in matters more than the report. */
+function rescan(): Promise<void> {
+  runtime.scanning ??= scanActivity()
+    .then(
+      (fresh) => {
+        runtime.scan = { ...fresh, at: fresh.activity.scannedAt };
+      },
+      () => undefined,
+    )
+    .finally(() => {
+      runtime.scanning = null;
+    });
+  return runtime.scanning;
+}
+
+/** The session's log, from this computer's own scan: read again first when it is newer than the last read, or was replaced since. */
+async function logFor(tool: Tool, sessionId: string): Promise<string | undefined> {
+  const logOf = () => (SESSION_ID.test(sessionId) ? runtime.scan?.logs.get(`${tool}:${sessionId}`) : undefined);
+  const file = logOf();
+  if (file && existsSync(/* turbopackIgnore: true */ file)) return file;
+  await rescan();
+  return logOf();
+}
+
+/**
+ * Sends the images of a session someone opened, read again from its log, one
+ * request each, while what sessions say may reach the website: nothing larger
+ * than MAX_IMAGE_BYTES, which says how large it is instead.
+ */
+async function answerImages(link: Link, asks: ImageAsk[], share: ShareLevel): Promise<void> {
+  const bySession = new Map<string, ImageAsk[]>();
+  for (const ask of asks) {
+    if ((ask.tool !== "claude" && ask.tool !== "codex") || typeof ask.sessionId !== "string" || !Number.isInteger(ask.n) || ask.n < 0) continue;
+    const key = `${ask.tool}:${ask.sessionId}`;
+    bySession.set(key, [...(bySession.get(key) ?? []), ask]);
+  }
+  for (const group of bySession.values()) {
+    const { tool, sessionId } = group[0];
+    const send = (n: number, answer: { type: string; data: string } | { error: string }) =>
+      agentFetch(link, "/api/agent/images", "POST", { tool, sessionId, n, ...answer }, IMAGE_TIMEOUT_MS).catch(() => undefined);
+    let found = new Map<number, LoggedImage>();
+    let error: string | null = null;
+    if (share === "off") error = "This computer keeps what its sessions say to itself.";
+    else {
+      const file = await logFor(tool, sessionId);
+      if (!file) error = "That session is not on this computer, or is more than 30 days old.";
+      else {
+        try {
+          found = await readImages(tool, file, new Set(group.map((a) => a.n)));
+        } catch (err) {
+          error = `Could not read the session's log: ${reason(err)}`;
+        }
+      }
+    }
+    for (const { n } of group) {
+      const image = found.get(n);
+      const bytes = image ? decodedBytes(image.data) : 0;
+      if (!image) await send(n, { error: error ?? "That image is not in the session's log any more." });
+      else if (bytes > MAX_IMAGE_BYTES) await send(n, { error: `Too large to send here (${(bytes / 1_000_000).toFixed(1)} MB).` });
+      else await send(n, { type: image.type, data: image.data });
+    }
+  }
 }
 
 /**
@@ -325,13 +401,7 @@ async function rescan(): Promise<void> {
  * it, the scan says which file it is.
  */
 async function answerTranscript(link: Link, ask: TranscriptAsk, share: ShareLevel): Promise<void> {
-  const logOf = () => (typeof ask.sessionId === "string" && SESSION_ID.test(ask.sessionId) ? runtime.scan?.logs.get(`${ask.tool}:${ask.sessionId}`) : undefined);
-  let file = logOf();
-  // A session newer than the last read of the logs, or a log the CLI replaced since: read them again first.
-  if (share !== "off" && (!file || !existsSync(/* turbopackIgnore: true */ file))) {
-    await rescan();
-    file = logOf();
-  }
+  const file = share !== "off" && typeof ask.sessionId === "string" ? await logFor(ask.tool, ask.sessionId) : undefined;
   let answer: { events?: TranscriptEvent[]; error?: string };
   if (share === "off") answer = { error: "This computer keeps what its sessions say to itself." };
   else if ((ask.tool !== "claude" && ask.tool !== "codex") || !file) answer = { error: "That session is not on this computer, or is more than 30 days old." };

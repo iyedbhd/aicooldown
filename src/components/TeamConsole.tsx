@@ -485,7 +485,9 @@ export function TeamConsole() {
             {ws && tab === "computers" && (
               <TeamComputers ws={ws} sessions={sessions} period={period} now={now} reload={reload} flash={flash} onNewChat={newChat} onShowSessions={showSessions} />
             )}
-            {ws && tab === "projects" && <TeamProjects ws={ws} period={period} now={now} onShowSessions={showSessions} onShare={share} />}
+            {ws && tab === "projects" && (
+              <TeamProjects ws={ws} sessions={sessions} period={period} now={now} onShowSessions={showSessions} onOpenSession={openSession} onShare={share} />
+            )}
             {ws && tab === "sessions" && (
               <TeamSessions
                 ws={ws}
