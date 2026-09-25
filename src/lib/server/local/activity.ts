@@ -11,8 +11,10 @@ import { livePlace } from "./cli";
  * What this computer's Claude Code and Codex CLIs worked on, from the session
  * logs they keep: Claude Code's under ~/.claude/projects, Codex's under
  * ~/.codex/sessions. Per session: where it started and from what, when, the
- * git branch, the models and their token counts, and its title or first
- * prompt (reported only from a computer that shares session content). The
+ * git branch, the models and their token counts, its subagents (Codex's
+ * sub-agent threads fold into the session that started them), and its title
+ * (Claude Code's custom title or summary, Codex's thread name) or else its
+ * first prompt (reported only from a computer that shares session content). The
  * rest of what sessions say is skipped over here; transcript.ts reads it on
  * request.
  *
@@ -22,7 +24,7 @@ import { livePlace } from "./cli";
 
 const DAYS = 30;
 const CACHE_FILE = path.join(DATA_DIR, "activity-cache.json");
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 /** Sessions reported, most recently active first. */
 const MAX_SESSIONS = 300;
 /** A title or first prompt is cut to this. */
@@ -37,12 +39,14 @@ type Counts = [number, number, number, number, number, number];
 /**
  * One log file: the folder its session started in (the CLIs also record where
  * each step ran, which wanders into subfolders), its session (a Claude Code
- * subagent's log carries its parent's), and what it used, with rows keyed by
+ * subagent's log carries its parent's; a Codex sub-agent's thread names the
+ * thread that started it as `parent`), and what it used, with rows keyed by
  * `day \t model`.
  */
 type FileSummary = {
   cwd: string | null;
   session: string | null;
+  parent: string | null;
   source: string | null;
   branch: string | null;
   startedAt: number;
@@ -57,7 +61,7 @@ const count = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v 
 const text = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
 const clip = (s: string) => (s.length > TITLE_MAX ? `${s.slice(0, TITLE_MAX - 1)}…` : s).replace(/\s+/g, " ").trim();
 
-const emptySummary = (): FileSummary => ({ cwd: null, session: null, source: null, branch: null, startedAt: 0, lastActive: 0, title: null, prompt: null, rows: {} });
+const emptySummary = (): FileSummary => ({ cwd: null, session: null, parent: null, source: null, branch: null, startedAt: 0, lastActive: 0, title: null, prompt: null, rows: {} });
 
 function add(summary: FileSummary, at: number, branch: unknown, model: string, counts: Counts): void {
   if (at >= summary.lastActive) {
@@ -181,6 +185,10 @@ async function summarizeCodex(file: string): Promise<FileSummary> {
       summary.cwd = text(payload.cwd);
       summary.session = text(payload.id) ?? text(payload.session_id);
       summary.source = text(payload.originator) ?? text(payload.source);
+      // A sub-agent's thread: its source is { subagent: ... }, and a spawned one names the thread that started it.
+      const sub = (payload.source as { subagent?: unknown } | null | undefined)?.subagent;
+      const spawn = sub && typeof sub === "object" ? (sub as { thread_spawn?: { parent_thread_id?: unknown } }).thread_spawn : undefined;
+      summary.parent = text(payload.parent_thread_id) ?? text(spawn?.parent_thread_id);
       summary.branch = text((payload.git as { branch?: unknown } | undefined)?.branch);
       const started = Date.parse(String(payload.timestamp ?? entry.timestamp));
       if (!Number.isNaN(started)) summary.startedAt = started;
@@ -219,6 +227,42 @@ async function logsUnder(dir: string, since: number, depth = 0): Promise<string[
     }
   }
   return out;
+}
+
+/**
+ * Codex's thread names, the titles its app and `codex resume` show (named by
+ * hand or for you), by thread id. The index only grows: a thread's last entry
+ * is its name now.
+ */
+async function codexThreadNames(): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const index = await readFile(path.join(/* turbopackIgnore: true */ livePlace("codex").dir, "session_index.jsonl"), "utf8").catch(() => "");
+  for (const line of index.split("\n")) {
+    const entry = parse(line);
+    const id = text(entry?.id);
+    const name = text(entry?.thread_name);
+    if (id && name) names.set(id, clip(name));
+  }
+  return names;
+}
+
+/**
+ * The model a Codex thread ran its latest turn on, from its log, looking only
+ * at logs written since `since`: what a remote Codex session used when it
+ * asked for none.
+ */
+export async function codexModel(threadId: string, since: number): Promise<string | null> {
+  const dir = path.join(/* turbopackIgnore: true */ livePlace("codex").dir, "sessions");
+  const file = (await logsUnder(dir, since)).find((f) => f.endsWith(`${threadId}.jsonl`));
+  let model: string | null = null;
+  if (file) {
+    for await (const line of lines(file)) {
+      if (!line.includes('"turn_context"')) continue;
+      const payload = parse(line)?.payload as { model?: unknown } | undefined;
+      if (typeof payload?.model === "string") model = payload.model;
+    }
+  }
+  return model;
 }
 
 async function loadCache(): Promise<Cache> {
@@ -307,6 +351,16 @@ export async function scanActivity(): Promise<Scan> {
   const projects: ProjectActivity[] = [];
   type SessionSum = Omit<SessionActivity, "usage"> & { models: Map<string, Counts> };
   const sessions = new Map<string, SessionSum>();
+  // A Codex sub-agent's thread counts in the session it was started from, as a Claude Code subagent's log does: the first thread up the chain.
+  const parents = new Map<string, string>();
+  for (const { tool, files } of groups.values()) {
+    if (tool === "codex") for (const { summary } of files) if (summary.session && summary.parent) parents.set(summary.session, summary.parent);
+  }
+  const rootOf = (id: string) => {
+    for (let hops = 0; hops < 10 && parents.has(id); hops++) id = parents.get(id)!;
+    return id;
+  };
+  const names = await codexThreadNames();
   for (const { tool, files } of groups.values()) {
     // Where the project is: where its own sessions started. Subagents' logs sit deeper, and may start in a subfolder.
     const start = files.filter((f) => f.summary.cwd).sort((x, y) => x.depth - y.depth || y.summary.lastActive - x.summary.lastActive)[0];
@@ -324,14 +378,16 @@ export async function scanActivity(): Promise<Scan> {
       }
       for (const [key, counts] of Object.entries(summary.rows)) addCounts(rows, key, counts);
       if (!summary.session) continue;
-      ids.add(summary.session);
-      const own = tool === "codex" || depth <= 2;
-      const key = `${tool}:${summary.session}`;
-      const s: SessionSum = sessions.get(key) ?? { tool, id: summary.session, path: shown, title: null, branch: null, source: null, startedAt: 0, lastActive: 0, subagents: 0, models: new Map() };
+      const id = tool === "codex" ? rootOf(summary.session) : summary.session;
+      ids.add(id);
+      const own = tool === "codex" ? id === summary.session : depth <= 2;
+      const key = `${tool}:${id}`;
+      const s: SessionSum = sessions.get(key) ?? { tool, id, path: shown, title: null, branch: null, source: null, startedAt: 0, lastActive: 0, subagents: 0, models: new Map() };
       sessions.set(key, s);
       if (own) {
         logs.set(key, file);
-        s.title = summary.title ?? summary.prompt ?? s.title;
+        s.path = shown; // a sub-agent may have started elsewhere: the session is where its own log says
+        s.title = (tool === "codex" ? names.get(id) : null) ?? summary.title ?? summary.prompt ?? s.title;
         s.source = summary.source ?? s.source;
       } else s.subagents += 1;
       if (summary.startedAt && (!s.startedAt || summary.startedAt < s.startedAt)) s.startedAt = summary.startedAt;

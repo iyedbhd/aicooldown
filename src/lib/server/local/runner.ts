@@ -1,5 +1,7 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { costOf } from "@/lib/pricing";
 import type { RunEventKind, RunJob, RunResult, RunStatus } from "@/lib/team";
+import { codexModel } from "./activity";
 import { cliBin, liveEnv } from "./cli";
 import { describeTool, outputText } from "./transcript";
 
@@ -82,7 +84,25 @@ if (!g.__aicooldownRuns) {
 }
 const live = g.__aicooldownRuns;
 
-type Outcome = { ok: boolean; text: string; costUsd?: number; turns?: number; durationMs?: number };
+/** A Codex run's tokens: input includes the cached part. */
+type CodexUsage = { input: number; cached: number; output: number };
+
+type Outcome = { ok: boolean; text: string; costUsd?: number; turns?: number; durationMs?: number; usage?: CodexUsage };
+
+const tokens = (x: unknown) => (typeof x === "number" && Number.isFinite(x) && x > 0 ? x : 0);
+
+/**
+ * What a Codex run's tokens would cost at API list prices, as Claude Code
+ * reports for its own runs: on the model it asked for, or else the one its
+ * thread's log says it ran on.
+ */
+async function codexCost(job: RunJob, threadId: string | null, since: number, usage: CodexUsage | undefined): Promise<number | undefined> {
+  if (!usage || usage.input + usage.output === 0) return undefined;
+  const model = job.model ?? (threadId ? await codexModel(threadId, since).catch(() => null) : null);
+  if (!model) return undefined;
+  const cached = Math.min(usage.cached, usage.input);
+  return costOf({ model, input: usage.input - cached, output: usage.output, cacheWrite: 0, cacheWrite1h: 0, cacheRead: cached }) ?? undefined;
+}
 
 /** Reads one CLI's stream: what to show, the session id, and how it ended. */
 type Stream = { onLine: (msg: Record<string, unknown>) => void; sessionId: () => string | null; outcome: () => Outcome | null };
@@ -122,6 +142,7 @@ function codexStream(job: RunJob, push: (kind: RunEventKind, text: string) => vo
   let outcome: Outcome | null = null;
   let last = "";
   let turns = 0;
+  const usage: CodexUsage = { input: 0, cached: 0, output: 0 };
   const shown = new Set<string>();
   return {
     sessionId: () => sessionId,
@@ -151,10 +172,14 @@ function codexStream(job: RunJob, push: (kind: RunEventKind, text: string) => vo
         }
       } else if (msg.type === "turn.completed") {
         turns += 1;
-        outcome = { ok: true, text: last, turns };
+        const u = (msg.usage ?? {}) as Record<string, unknown>;
+        usage.input += tokens(u.input_tokens);
+        usage.cached += tokens(u.cached_input_tokens);
+        usage.output += tokens(u.output_tokens);
+        outcome = { ok: true, text: last, turns, usage };
       } else if (msg.type === "turn.failed" || msg.type === "error") {
         const error = msg.type === "error" ? msg.message : (msg.error as { message?: unknown } | undefined)?.message;
-        outcome = { ok: false, text: typeof error === "string" ? error : "Codex stopped with an error.", turns };
+        outcome = { ok: false, text: typeof error === "string" ? error : "Codex stopped with an error.", turns, usage };
         push("error", outcome.text);
       }
     },
@@ -257,9 +282,10 @@ export function runSession(job: RunJob, folder: string, report: Reporter, stop: 
             : { status: "failed", error: outcome?.text || stderr.trim().split("\n").slice(-3).join(" ") || `The CLI exited with code ${code}.` });
       if (done.status === "done" && job.tool === "codex") push("result", outcome?.text || "Done.");
       if (done.error && done.status !== "done") push(done.status === "cancelled" ? "info" : "error", done.error);
+      const costUsd = outcome?.costUsd ?? (job.tool === "codex" ? await codexCost(job, stream.sessionId(), started, outcome?.usage) : undefined);
       const final = {
         status: done.status,
-        result: { costUsd: outcome?.costUsd, turns: outcome?.turns, durationMs: outcome?.durationMs ?? Date.now() - started, error: done.error || undefined },
+        result: { costUsd, turns: outcome?.turns, durationMs: outcome?.durationMs ?? Date.now() - started, error: done.error || undefined },
       };
       await flushing;
       // The last report carries the outcome: worth a few tries.
