@@ -333,7 +333,7 @@ let loginPath: string[] = [];
 export function readLoginPath(): void {
   if (process.platform === "win32" || loginPath.length) return;
   const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
-  execFile(shell, ["-ilc", 'printf "__PATH__%s__PATH__" "$PATH"'], { timeout: 5_000, windowsHide: true }, (err, out) => {
+  execFile(/* turbopackIgnore: true */ shell, ["-ilc", 'printf "__PATH__%s__PATH__" "$PATH"'], { timeout: 5_000, windowsHide: true }, (err, out) => {
     const found = !err && /__PATH__(.*)__PATH__/.exec(String(out));
     if (found) loginPath = found[1].split(":").filter(Boolean);
   });
