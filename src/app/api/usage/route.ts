@@ -34,7 +34,7 @@ export async function POST(req: Request) {
       }
       const answer = { ...usage, plan: plan ?? usage.plan };
       // The latest reading, for the owners and admins of this user's teams. Best effort.
-      if (!usage.stale) await saveUsage(stored.id, answer).catch(() => undefined);
+      if (!usage.stale) await saveUsage(user.id, stored.id, answer).catch(() => undefined);
       return NextResponse.json(answer);
     } catch (err) {
       return errorResponse(err);

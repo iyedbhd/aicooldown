@@ -1,7 +1,7 @@
 import type { Tool } from "../activity";
 import { IMAGE_TYPES, MAX_IMAGE_BYTES, type ImageState, type ImageType } from "../team";
 import type { User } from "./auth";
-import { decrypt, encrypt } from "./crypto";
+import { openRaw, sealRaw } from "./crypto";
 import { db, ensureSchema, placeholders } from "./db";
 import { heatDevice } from "./devices";
 import { RequestError } from "./request-error";
@@ -11,8 +11,9 @@ import { keyOf, visibleDevice } from "./transcripts";
  * A session's images: its transcript notes each one (see ImageRef), and when
  * someone who may read the session opens it, its computer reads it again from
  * the CLI's log on its next check-in and sends it, one image a request. Kept
- * here like transcripts: encrypted, for a week, and dropped as soon as the
- * computer turns private. Only PNG, JPEG, GIF and WebP, checked to be what
+ * here encrypted for three days (retention.ts), a hundred per computer, and
+ * dropped as soon as the computer turns private: it sends them again when
+ * asked. Only PNG, JPEG, GIF and WebP, checked to be what
  * they say they are, so a browser shows them as pictures and nothing else.
  */
 
@@ -21,7 +22,7 @@ const ANSWER_MS = 10 * 60_000;
 /** Images asked about in one request. */
 const MAX_ASK = 24;
 /** Images kept per computer: asking for more lets the ones read longest ago go. */
-const MAX_PER_DEVICE = 300;
+const MAX_PER_DEVICE = 100;
 /** Images a computer is asked for at each check-in. */
 const PER_CHECK_IN = 4;
 
@@ -113,7 +114,7 @@ export async function getImage(viewer: User, raw: Record<string, unknown>): Prom
     args: [k.deviceId, k.tool, k.sessionId, n],
   });
   const row = res.rows[0] as Row | undefined;
-  return row ? { type: String(row.type) as ImageType, bytes: Buffer.from(decrypt(String(row.content)), "base64") } : null;
+  return row ? { type: String(row.type) as ImageType, bytes: openRaw(row.content) } : null;
 }
 
 // ---- The computer's side, authenticated by its device token.
@@ -133,14 +134,14 @@ export async function storeImage(deviceId: string, raw: Record<string, unknown>)
   const [n] = numbers([raw.n]);
   let error = typeof raw.error === "string" && raw.error ? raw.error.slice(0, 300) : null;
   let type: ImageType | null = null;
-  let content: string | null = null;
+  let content: Uint8Array | null = null;
   if (!error) {
     const bytes = typeof raw.data === "string" ? Buffer.from(raw.data, "base64") : Buffer.alloc(0);
     type = IMAGE_TYPES.includes(raw.type as ImageType) ? (raw.type as ImageType) : null;
     if (!type) error = "Not a kind of image shown here.";
     else if (bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES) error = "Empty, or too large to keep.";
     else if (!SIGNATURE[type](bytes)) error = "Not the image it says it is.";
-    else content = encrypt(bytes.toString("base64"));
+    else content = sealRaw(bytes);
   }
   await db().execute({
     sql: `UPDATE session_images SET status = ?, type = ?, content = ?, error = ?, updated_at = ?

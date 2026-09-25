@@ -1,7 +1,7 @@
 import type { DeviceActivity, ModelUsage, ProjectActivity, SessionActivity, TokenRow } from "../activity";
 import type { CliProfile, HelloRun, HelloSchedule, ScheduleMode } from "../local";
 import { GRANT_NOTHING, MODEL_NAME, REMOTE_LEVELS, SESSION_ID, type Device, type DeviceInfo, type DeviceManage, type Grant, type RemoteLevel, type ShareLevel, type ToolState } from "../team";
-import { decrypt, encrypt, newId, openJson, randomToken, sealJson, sha256 } from "./crypto";
+import { decrypt, encrypt, newId, openCompact, openJson, randomToken, sealCompact, sealJson, sha256 } from "./crypto";
 import { db, ensureSchema, placeholders } from "./db";
 import { RequestError } from "./request-error";
 import { forgetDevice, visibleActivity } from "./sharing";
@@ -57,7 +57,7 @@ function toRecord(r: Row): DeviceRecord {
     hotUntil: Number(r.hot_until ?? 0),
     connected: r.token_hash !== null,
     // Titles go the moment the computer stops sharing, before its next report.
-    activity: r.activity ? parseActivity(openJson(String(r.activity)), info.share !== "off") : null,
+    activity: r.activity ? parseActivity(openCompact(r.activity), info.share !== "off") : null,
     createdAt: Number(r.created_at),
   };
 }
@@ -255,23 +255,25 @@ export async function deviceFromRequest(req: Request): Promise<DeviceRecord | nu
  * A check-in: what the computer says about itself now, and a new activity
  * report when it sent one. A computer checking in every few seconds while
  * someone works with it says the same thing most times: that is not written
- * again for a while.
+ * again for a minute (being online is judged over three).
  */
 export async function recordSync(device: DeviceRecord, info: DeviceInfo, manage: DeviceManage | null, activity: DeviceActivity | null | undefined): Promise<void> {
   const now = Date.now();
   const same = JSON.stringify(info) === JSON.stringify(device.info) && JSON.stringify(manage) === JSON.stringify(device.manage);
-  if (activity === undefined && same && now - device.lastSeenAt < 20_000) return;
+  if (activity === undefined && same && now - device.lastSeenAt < 60_000) return;
   const report = sealJson({ ...info, manage });
   await db().execute(
     activity === undefined
       ? { sql: "UPDATE devices SET info = ?, last_seen_at = ? WHERE id = ?", args: [report, now, device.id] }
-      : { sql: "UPDATE devices SET info = ?, activity = ?, last_seen_at = ? WHERE id = ?", args: [report, activity && sealJson(activity), now, device.id] },
+      : { sql: "UPDATE devices SET info = ?, activity = ?, last_seen_at = ? WHERE id = ?", args: [report, activity && sealCompact(activity), now, device.id] },
   );
 }
 
 /** Someone works with this computer from the website: it checks in every few seconds for a while, so what they ask for starts at once. */
 export async function heatDevice(id: string): Promise<void> {
-  await db().execute({ sql: "UPDATE devices SET hot_until = MAX(hot_until, ?) WHERE id = ?", args: [Date.now() + HOT_MS, id] });
+  // Written once a minute at most, however often it is asked.
+  const until = Date.now() + HOT_MS;
+  await db().execute({ sql: "UPDATE devices SET hot_until = ? WHERE id = ? AND hot_until < ?", args: [until, id, until - 60_000] });
 }
 
 /** The computer disconnecting itself: its token stops working, its history stays. */

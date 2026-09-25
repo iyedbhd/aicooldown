@@ -1,7 +1,7 @@
 import type { Tool } from "../activity";
 import { SESSION_ID, type RunEventKind, type Transcript } from "../team";
 import type { User } from "./auth";
-import { decrypt, encrypt } from "./crypto";
+import { openCompact, sealCompact } from "./crypto";
 import { db, ensureSchema } from "./db";
 import { deviceById, heatDevice, type DeviceRecord } from "./devices";
 import { RequestError } from "./request-error";
@@ -47,7 +47,7 @@ export async function visibleDevice(viewer: User, k: Key): Promise<DeviceRecord>
 }
 
 function toTranscript(r: Row): Transcript {
-  const events = r.content ? (JSON.parse(decrypt(String(r.content))) as { at: number; kind: RunEventKind; text: string }[]) : [];
+  const events = r.content ? openCompact<{ at: number; kind: RunEventKind; text: string }[]>(r.content) : [];
   return {
     status: String(r.status) as Transcript["status"],
     events: events.map((e, i) => ({ seq: i + 1, ...e })),
@@ -135,7 +135,7 @@ export async function storeTranscript(deviceId: string, raw: Record<string, unkn
   // A failed read again keeps the copy read before.
   await db().execute({
     sql: "UPDATE session_transcripts SET status = ?, content = COALESCE(?, content), error = ?, updated_at = ? WHERE device_id = ? AND tool = ? AND session_id = ? AND status = 'pending'",
-    args: [error ? "failed" : "ready", error ? null : encrypt(JSON.stringify(events)), error, Date.now(), k.deviceId, k.tool, k.sessionId],
+    args: [error ? "failed" : "ready", error ? null : sealCompact(events), error, Date.now(), k.deviceId, k.tool, k.sessionId],
   });
 }
 

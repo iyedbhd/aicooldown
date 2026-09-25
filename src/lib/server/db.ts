@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { createClient, type Client } from "@libsql/client";
 import { DATA_DIR } from "./data-dir";
@@ -152,6 +153,23 @@ CREATE TABLE IF NOT EXISTS sharing (
   policy TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+-- What each check-in, page load and clean-up looks for, so it reads those rows and not every row
+-- of a table: a hosted database counts each row a query reads.
+DROP INDEX IF EXISTS runs_open;
+CREATE INDEX IF NOT EXISTS runs_state ON runs(device_id, status, created_at);
+CREATE INDEX IF NOT EXISTS runs_creator ON runs(created_by, created_at);
+CREATE INDEX IF NOT EXISTS runs_created ON runs(created_at);
+CREATE INDEX IF NOT EXISTS device_commands_open ON device_commands(device_id, status);
+CREATE INDEX IF NOT EXISTS device_commands_created ON device_commands(created_at);
+CREATE INDEX IF NOT EXISTS session_transcripts_open ON session_transcripts(device_id, status);
+CREATE INDEX IF NOT EXISTS session_transcripts_updated ON session_transcripts(updated_at);
+CREATE INDEX IF NOT EXISTS session_images_open ON session_images(device_id, status);
+CREATE INDEX IF NOT EXISTS session_images_updated ON session_images(updated_at);
+CREATE INDEX IF NOT EXISTS sessions_expires ON sessions(expires_at);
 `;
 
 /**
@@ -201,7 +219,15 @@ export function placeholders(count: number): string {
   return count === 0 ? "NULL" : Array.from({ length: count }, () => "?").join(", ");
 }
 
+/** Which schema a database was last brought up to, so a server starting against it skips what is done already. */
+const SCHEMA_VERSION = createHash("sha256").update(SCHEMA).update(MIGRATIONS.join(";")).digest("hex").slice(0, 16);
+
 async function migrate(): Promise<void> {
+  // One read when nothing changed, rather than every CREATE and ALTER again on each server start.
+  const current = await db()
+    .execute("SELECT value FROM meta WHERE key = 'schema'")
+    .then((r) => (r.rows[0] ? String(r.rows[0].value) : null), () => null);
+  if (current === SCHEMA_VERSION) return;
   await db().executeMultiple(SCHEMA);
   for (const sql of MIGRATIONS) {
     await db()
@@ -210,6 +236,7 @@ async function migrate(): Promise<void> {
         if (!/duplicate column/i.test(err instanceof Error ? err.message : String(err))) throw err;
       });
   }
+  await db().execute({ sql: "INSERT INTO meta (key, value) VALUES ('schema', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", args: [SCHEMA_VERSION] });
 }
 
 export function ensureSchema(): Promise<void> {

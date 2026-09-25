@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { remoteDatabase } from "./db";
 
 /*
@@ -99,3 +100,43 @@ export const sealJson = (value: unknown) => encrypt(JSON.stringify(value));
 
 /** A value kept by sealJson, or as plain JSON by a version from before it. */
 export const openJson = <T>(stored: string): T => JSON.parse(stored.startsWith("v1:") ? decrypt(stored) : stored) as T;
+
+/*
+ * Large values (conversations, activity reports, images) are kept as bytes,
+ * not text: base64 makes anything a third larger, twice over for an image,
+ * and JSON shrinks several times when compressed. The first byte says how:
+ * 2 is compressed JSON, 3 is bytes as they are. Then the IV, the tag and the
+ * ciphertext, as encrypt has them.
+ */
+const COMPACT_JSON = 2;
+const RAW_BYTES = 3;
+
+function sealBytes(kind: number, plain: Buffer): Uint8Array {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key(), iv);
+  const ct = Buffer.concat([cipher.update(plain), cipher.final()]);
+  return new Uint8Array(Buffer.concat([Buffer.from([kind]), iv, cipher.getAuthTag(), ct]));
+}
+
+function openBytes(kind: number, stored: ArrayBuffer | Uint8Array): Buffer {
+  const buf = Buffer.from(stored instanceof Uint8Array ? stored : new Uint8Array(stored));
+  if (buf[0] !== kind) throw new Error("Unknown ciphertext format");
+  const decipher = createDecipheriv("aes-256-gcm", key(), buf.subarray(1, 13));
+  decipher.setAuthTag(buf.subarray(13, 29));
+  return Buffer.concat([decipher.update(buf.subarray(29)), decipher.final()]);
+}
+
+/** A large value kept as encrypted, compressed JSON bytes. */
+export const sealCompact = (value: unknown): Uint8Array => sealBytes(COMPACT_JSON, deflateRawSync(Buffer.from(JSON.stringify(value), "utf8")));
+
+/** A value kept by sealCompact, or by sealJson before it. */
+export function openCompact<T>(stored: unknown): T {
+  if (typeof stored === "string") return openJson<T>(stored);
+  return JSON.parse(inflateRawSync(openBytes(COMPACT_JSON, stored as ArrayBuffer)).toString("utf8")) as T;
+}
+
+/** Bytes kept encrypted as they are (an image, already compressed). */
+export const sealRaw = (bytes: Buffer): Uint8Array => sealBytes(RAW_BYTES, bytes);
+
+/** Bytes kept by sealRaw, or as encrypted base64 text before it. */
+export const openRaw = (stored: unknown): Buffer => (typeof stored === "string" ? Buffer.from(decrypt(stored), "base64") : openBytes(RAW_BYTES, stored as ArrayBuffer));

@@ -105,12 +105,21 @@ export async function deleteAccount(userId: string, id: string): Promise<void> {
   );
 }
 
-/** Keeps the latest usage read for a stored account, so a team's admins see it without calling the provider again. */
-export async function saveUsage(id: string, usage: Usage): Promise<void> {
+/** How old the kept reading must be before a newer one replaces it: minutes for someone in a team, whose admins look; longer for anyone else. */
+const KEEP_USAGE_EVERY_MS = { team: 5 * 60_000, alone: 30 * 60_000 };
+
+/**
+ * Keeps the latest usage read for a stored account, so a team's admins see it
+ * without calling the provider again. Dashboards read usage every minute or
+ * three; it is written only now and then.
+ */
+export async function saveUsage(userId: string, id: string, usage: Usage): Promise<void> {
   await ensureSchema();
+  const inTeam = (await db().execute({ sql: "SELECT 1 FROM team_members WHERE user_id = ? LIMIT 1", args: [userId] })).rows.length > 0;
   await db().execute({
-    sql: "INSERT INTO account_usage (account_id, usage, fetched_at) VALUES (?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET usage = excluded.usage, fetched_at = excluded.fetched_at",
-    args: [id, sealJson(usage), Date.parse(usage.fetchedAt) || Date.now()],
+    sql: `INSERT INTO account_usage (account_id, usage, fetched_at) VALUES (?, ?, ?)
+      ON CONFLICT(account_id) DO UPDATE SET usage = excluded.usage, fetched_at = excluded.fetched_at WHERE account_usage.fetched_at <= excluded.fetched_at - ?`,
+    args: [id, sealJson(usage), Date.parse(usage.fetchedAt) || Date.now(), inTeam ? KEEP_USAGE_EVERY_MS.team : KEEP_USAGE_EVERY_MS.alone],
   });
 }
 
