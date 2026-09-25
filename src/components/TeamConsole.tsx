@@ -3,13 +3,12 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchSession, type SessionUser } from "@/lib/session";
-import { createTeam, deleteTeam, fetchTeams, fetchWorkspace, manages, removeMember, renameTeam, type Run, type TeamSummary, type Workspace } from "@/lib/team";
+import { createTeam, deleteTeam, fetchTeams, fetchWorkspace, manages, mayRunOn, removeMember, renameTeam, type TeamSummary, type Workspace } from "@/lib/team";
 import { allSessions, liveNow, PERIODS, type Period } from "@/lib/team-stats";
 import { AuthDialog } from "./AuthDialog";
+import { ChatPanel, type ChatTarget } from "./ChatPanel";
 import { Icon } from "./Icon";
 import { Mark, Wordmark } from "./Logo";
-import { RunPanel } from "./RunPanel";
-import { SessionPanel } from "./SessionPanel";
 import { RoleBadge } from "./TeamBits";
 import { TeamComputers } from "./TeamComputers";
 import { TeamOverview } from "./TeamOverview";
@@ -57,11 +56,9 @@ export function TeamConsole() {
   const [period, setPeriod] = useState<Period>(7);
   const [now, setNow] = useState(() => Date.now());
   const [note, setNote] = useState<string | null>(null);
-  const [runId, setRunId] = useState<string | null>(null);
-  /** The session open in its panel, by SessionRow key. */
-  const [sessionKey, setSessionKey] = useState<string | null>(null);
+  /** The conversation open in the chat. */
+  const [chat, setChat] = useState<ChatTarget | null>(null);
   const [filter, setFilter] = useState<SessionFilter>(NO_FILTER);
-  const [sessionDevice, setSessionDevice] = useState<string | undefined>(undefined);
   const [showAuth, setShowAuth] = useState(false);
   const [creating, setCreating] = useState(false);
   const [teamName, setTeamName] = useState("");
@@ -84,7 +81,7 @@ export function TeamConsole() {
     if (scopeRef.current !== next) {
       setWs(null);
       setFilter(NO_FILTER);
-      setSessionKey(null);
+      setChat(null);
     }
     scopeRef.current = next;
     setScope(next);
@@ -183,32 +180,21 @@ export function TeamConsole() {
     flash(owner ? "Team deleted." : "You left the team.");
   }
 
-  function openSessionOn(deviceId: string) {
-    setSessionDevice(deviceId);
-    setTab("sessions");
-  }
-
   /** The Sessions tab, showing a person's, a computer's or a project's sessions. */
   function showSessions(only: Partial<SessionFilter> = {}) {
     setFilter({ ...NO_FILTER, ...only });
     setTab("sessions");
   }
 
-  function openRun(id: string) {
-    setSessionKey(null);
-    setRunId(id);
-  }
-
-  function started(run: Run) {
-    setRunId(run.id);
-    void loadWorkspace();
-  }
+  const openRun = (id: string) => setChat({ kind: "run", id });
+  const openSession = (key: string) => setChat({ kind: "session", key });
+  const newChat = (deviceId?: string) => setChat({ kind: "new", deviceId });
 
   const devices = ws?.members.flatMap((m) => m.devices) ?? [];
   const sessions = ws ? allSessions(ws, now) : [];
   const live = ws ? liveNow(ws, sessions) : null;
   const liveCount = live ? live.sessions.length + live.runs.length : 0;
-  const openSession = sessionKey ? sessions.find((s) => s.key === sessionKey) : undefined;
+  const canChat = Boolean(ws && devices.some((d) => mayRunOn(ws, d)));
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
@@ -366,8 +352,15 @@ export function TeamConsole() {
                 </button>
               ))}
             </div>
+            <div className="mb-2 flex items-center gap-2">
+              {canChat && (
+                <button type="button" onClick={() => newChat()} className="btn btn-primary">
+                  <Icon name="terminal" />
+                  New chat
+                </button>
+              )}
             {tab !== "sessions" && (
-              <div role="group" aria-label="Period" className="mb-2 flex items-center gap-0.5 rounded-lg border border-line bg-panel p-0.5">
+              <div role="group" aria-label="Period" className="flex items-center gap-0.5 rounded-lg border border-line bg-panel p-0.5">
                 {PERIODS.map((p) => (
                   <button
                     key={p}
@@ -381,6 +374,7 @@ export function TeamConsole() {
                 ))}
               </div>
             )}
+            </div>
           </div>
 
           <div className="mt-5">
@@ -398,16 +392,16 @@ export function TeamConsole() {
                 period={period}
                 now={now}
                 onOpenRun={openRun}
-                onOpenSession={setSessionKey}
+                onOpenSession={openSession}
                 onShowSessions={() => showSessions()}
                 onShowComputers={() => setTab("computers")}
               />
             )}
             {ws && tab === "people" && (
-              <TeamPeople ws={ws} sessions={sessions} period={period} now={now} reload={reload} flash={flash} onOpenSession={setSessionKey} onShowSessions={showSessions} />
+              <TeamPeople ws={ws} sessions={sessions} period={period} now={now} reload={reload} flash={flash} onOpenSession={openSession} onShowSessions={showSessions} />
             )}
             {ws && tab === "computers" && (
-              <TeamComputers ws={ws} sessions={sessions} period={period} now={now} reload={reload} flash={flash} onNewSession={openSessionOn} onShowSessions={showSessions} />
+              <TeamComputers ws={ws} sessions={sessions} period={period} now={now} reload={reload} flash={flash} onNewChat={newChat} onShowSessions={showSessions} />
             )}
             {ws && tab === "projects" && <TeamProjects ws={ws} period={period} now={now} onShowSessions={showSessions} />}
             {ws && tab === "sessions" && (
@@ -417,18 +411,26 @@ export function TeamConsole() {
                 now={now}
                 filter={filter}
                 onFilter={setFilter}
-                deviceId={sessionDevice}
-                onStarted={started}
+                onNewChat={canChat ? () => newChat() : undefined}
                 onOpenRun={openRun}
-                onOpenSession={setSessionKey}
+                onOpenSession={openSession}
               />
             )}
           </div>
         </>
       )}
 
-      {openSession && <SessionPanel key={openSession.key} session={openSession} now={now} onClose={() => setSessionKey(null)} onOpenRun={openRun} />}
-      {runId && ws && <RunPanel key={runId} runId={runId} ws={ws} now={now} onClose={() => setRunId(null)} onOpen={started} />}
+      {chat && ws && (
+        <ChatPanel
+          key={chat.kind === "new" ? `new:${chat.deviceId ?? ""}` : chat.kind === "run" ? chat.id : chat.key}
+          ws={ws}
+          sessions={sessions}
+          now={now}
+          target={chat}
+          onClose={() => setChat(null)}
+          onChanged={() => void loadWorkspace()}
+        />
+      )}
       {showAuth && (
         <AuthDialog
           localCount={0}

@@ -1,5 +1,6 @@
 import type { Member, Role, Workspace } from "../team";
 import { listAccountsWithUsage } from "./accounts";
+import { recentCommands } from "./commands";
 import type { User } from "./auth";
 import { db, ensureSchema } from "./db";
 import { listDevices } from "./devices";
@@ -38,8 +39,12 @@ export async function workspace(viewer: User, scope: string): Promise<Workspace>
   }
   const seesAll = role === "owner" || role === "admin";
   const detailed = people.filter((p) => seesAll || p.id === viewer.id).map((p) => p.id);
-  const [devices, accounts, invites] = await Promise.all([listDevices(detailed), listAccountsWithUsage(detailed), team && seesAll ? listInvites(team.id) : []]);
-  const runs = await listRuns(devices.map((d) => d.id), viewer.id, team?.id ?? null);
+  const [devices, accounts, invites] = await Promise.all([listDevices(detailed, viewer.id), listAccountsWithUsage(detailed), team && seesAll ? listInvites(team.id) : []]);
+  const [runs, commands] = await Promise.all([
+    listRuns(devices.map((d) => d.id), viewer.id, team?.id ?? null),
+    recentCommands(devices.filter((d) => d.userId === viewer.id).map((d) => d.id)),
+  ]);
+  for (const d of devices) d.commands = commands.get(d.id) ?? [];
   const members: Member[] = people.map((p) => ({
     ...p,
     detailed: detailed.includes(p.id),

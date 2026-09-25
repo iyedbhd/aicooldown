@@ -5,7 +5,7 @@ import type { HelloRun, HelloSchedule, LocalState, ScheduleMode } from "@/lib/lo
 import { accountsServerHost } from "@/lib/server/accounts-server";
 import { DATA_DIR } from "@/lib/server/data-dir";
 import type { Provider } from "@/lib/types";
-import { forget, liveState, saveCurrent, sayHello, sessionResetAt, switchTo, updateSavedCopy } from "./cli";
+import { forget, liveState, saveCurrent, sayHello, sessionResetAt, signInCommand, switchTo, toolState, updateSavedCopy } from "./cli";
 import { deviceState } from "./device";
 
 /**
@@ -154,7 +154,17 @@ export async function localState(): Promise<LocalState> {
   queueCopyUpdate("claude");
   queueCopyUpdate("codex");
   const [{ live, profiles }, store, device] = await Promise.all([liveState(), load(), deviceState()]);
-  return { live, profiles, schedules: store.schedules, runs: store.runs, accountsServer: accountsServerHost(), device };
+  const tools = {
+    claude: { state: toolState("claude", live.claude), signIn: signInCommand("claude") },
+    codex: { state: toolState("codex", live.codex), signIn: signInCommand("codex") },
+  };
+  return { live, profiles, schedules: store.schedules, runs: store.runs, accountsServer: accountsServerHost(), tools, device };
+}
+
+/** The scheduled hellos and the last hello per saved login, for the computer's report to its owner. */
+export async function helloState(): Promise<Pick<Store, "schedules" | "runs">> {
+  const { schedules, runs } = await load();
+  return { schedules, runs };
 }
 
 /** The route's actions, validated there. */

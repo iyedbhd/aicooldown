@@ -1,10 +1,11 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { CliProfile, LiveLogin } from "@/lib/local";
+import type { ToolState } from "@/lib/team";
 import { claudePlanLabel, fetchClaudeAccount, fetchClaudeUsage, refreshClaudeTokens } from "@/lib/providers/claude";
 import { codexIdentityFromTokens, fetchCodexUsage } from "@/lib/providers/codex";
 import { DATA_DIR } from "@/lib/server/data-dir";
@@ -316,21 +317,114 @@ export async function sessionResetAt(id: string): Promise<number | null> {
 const HELLO = "hello";
 const HELLO_TIMEOUT_MS = 3 * 60_000;
 
+/*
+ * Finding the CLIs. A desktop app started from the Dock or the Start menu
+ * does not get the PATH a terminal has (on macOS it is bare), so besides PATH
+ * this looks in the login shell's PATH and the usual install folders, and
+ * then at the copies the Claude and Codex desktop apps keep for themselves:
+ * someone who only uses the desktop apps still has a CLI to run remote
+ * sessions with. (The ignore comments stop the build from tracing, and
+ * bundling, every file these paths could match.)
+ */
+
+let loginPath: string[] = [];
+
+/** Reads the login shell's PATH once, in the background; until then the usual folders stand in. */
+export function readLoginPath(): void {
+  if (process.platform === "win32" || loginPath.length) return;
+  const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
+  execFile(shell, ["-ilc", 'printf "__PATH__%s__PATH__" "$PATH"'], { timeout: 5_000, windowsHide: true }, (err, out) => {
+    const found = !err && /__PATH__(.*)__PATH__/.exec(String(out));
+    if (found) loginPath = found[1].split(":").filter(Boolean);
+  });
+}
+
+/** Where to look for a CLI, in order. */
+function searchPath(): string[] {
+  const dirs = (process.env.PATH ?? "").split(path.delimiter);
+  if (process.platform !== "win32") {
+    const home = os.homedir();
+    dirs.push(...loginPath, path.join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin", path.join(home, ".npm-global", "bin"), path.join(home, ".bun", "bin"));
+  }
+  return [...new Set(dirs.filter(Boolean))];
+}
+
+function onPath(name: string): string | null {
+  const exts = process.platform === "win32" ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
+  for (const dir of searchPath()) {
+    for (const ext of exts) {
+      const file = path.join(/* turbopackIgnore: true */ dir, name + ext.toLowerCase());
+      if (existsSync(/* turbopackIgnore: true */ file)) return file;
+    }
+  }
+  return null;
+}
+
+/** The newest x.y.z folder under `base` holding `file`. */
+function newestIn(base: string | undefined, file: string): string | null {
+  if (!base || !existsSync(/* turbopackIgnore: true */ base)) return null;
+  const versions = readdirSync(/* turbopackIgnore: true */ base).filter((v) => /^\d+\.\d+\.\d+$/.test(v));
+  versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  for (const v of versions) {
+    const full = path.join(/* turbopackIgnore: true */ base, v, file);
+    if (existsSync(/* turbopackIgnore: true */ full)) return full;
+  }
+  return null;
+}
+
+/** The copy of the CLI a desktop app keeps: Claude's per version under its app data, Codex's in its resources. */
+function bundledCli(provider: Provider): string | null {
+  const home = os.homedir();
+  if (provider === "claude") {
+    if (process.platform === "win32") return newestIn(process.env.APPDATA && path.join(process.env.APPDATA, "Claude", "claude-code"), "claude.exe");
+    if (process.platform === "darwin") return newestIn(path.join(home, "Library", "Application Support", "Claude", "claude-code"), "claude");
+    return null;
+  }
+  const candidates =
+    process.platform === "win32"
+      ? [process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs", "Codex", "resources", "codex.exe")]
+      : process.platform === "darwin"
+        ? ["/Applications/Codex.app/Contents/Resources/codex", path.join(home, "Applications", "Codex.app", "Contents", "Resources", "codex")]
+        : [];
+  return candidates.find((f): f is string => Boolean(f) && existsSync(/* turbopackIgnore: true */ f!)) ?? null;
+}
+
 /**
  * How to start a CLI: its executable, and whether it needs a shell (Windows
- * resolves the claude.cmd / codex.cmd shims through one). The name stays
- * unquoted: cmd.exe resolves a quoted one's %~dp0, which npm's shims rely on,
- * to the working folder.
+ * resolves npm's claude.cmd / codex.cmd shims through one), or null when it
+ * is nowhere to be found. A shim's name stays unquoted: cmd.exe resolves a
+ * quoted one's %~dp0, which npm's shims rely on, to the working folder.
  */
-export function cliBin(provider: Provider): { bin: string; shell: boolean } {
-  let bin: string = provider;
-  if (provider === "codex") {
-    // The Codex desktop app on Windows bundles the CLI without putting it on PATH.
-    const bundled = process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs", "Codex", "resources", "codex.exe");
-    // The ignore comment stops the build from tracing (and bundling) every file this path could match.
-    if (process.platform === "win32" && bundled && existsSync(/* turbopackIgnore: true */ bundled)) bin = bundled;
-  }
-  return { bin, shell: process.platform === "win32" && !bin.endsWith(".exe") };
+export function findCli(provider: Provider): { bin: string; shell: boolean } | null {
+  const found = onPath(provider);
+  if (found) return process.platform === "win32" && !found.toLowerCase().endsWith(".exe") ? { bin: provider, shell: true } : { bin: found, shell: false };
+  const bundled = bundledCli(provider);
+  return bundled ? { bin: bundled, shell: false } : null;
+}
+
+/** The CLI to start, or its bare name when there is none, so starting it says it was not found. */
+export const cliBin = (provider: Provider) => findCli(provider) ?? { bin: provider, shell: process.platform === "win32" };
+
+/**
+ * Whether a CLI can run remote sessions here. Signed out only when that is
+ * certain: on macOS Claude Code keeps its login in the Keychain, where this
+ * does not look.
+ */
+export function toolState(provider: Provider, live: LiveLogin): ToolState {
+  if (!findCli(provider)) return "missing";
+  return live === null && (provider === "codex" || process.platform !== "darwin") ? "signed-out" : "ready";
+}
+
+/**
+ * What to run in a terminal on this computer to sign a CLI in, with the copy
+ * found here: its bare path works in cmd, PowerShell and sh alike, and only a
+ * path with spaces needs quoting (the call operator, in PowerShell).
+ */
+export function signInCommand(provider: Provider): string {
+  const found = findCli(provider);
+  const path = !found || found.bin === provider ? provider : found.bin;
+  const bin = !/\s/.test(path) ? path : process.platform === "win32" ? `& "${path}"` : `"${path}"`;
+  return provider === "claude" ? `${bin} auth login` : `${bin} login`;
 }
 
 const HELLO_ARGS: Record<Provider, string[]> = {
@@ -345,6 +439,8 @@ const HELLO_ARGS: Record<Provider, string[]> = {
  */
 function childEnv(provider: Provider, place: Place, active: boolean): NodeJS.ProcessEnv {
   const env = { ...process.env };
+  // The folders the CLI was found in, for what it starts in turn (git, node): a desktop app's own PATH may be bare.
+  if (process.platform !== "win32") env.PATH = searchPath().join(":");
   for (const k of Object.keys(env)) if (/^(CLAUDE|ANTHROPIC_|OPENAI_API_KEY$|CODEX_|APP_SECRET$|LIBSQL_|TURSO_|AICOOLDOWN_)/.test(k)) delete env[k];
   if (provider === "claude" && (!active || process.env.CLAUDE_CONFIG_DIR)) env.CLAUDE_CONFIG_DIR = place.dir;
   if (provider === "codex" && (!active || process.env.CODEX_HOME)) env.CODEX_HOME = place.dir;

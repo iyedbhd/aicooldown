@@ -140,6 +140,7 @@ export async function deleteAccount(user: User, password: unknown): Promise<void
       { sql: "DELETE FROM run_events WHERE run_id IN (SELECT r.id FROM runs r JOIN devices d ON d.id = r.device_id WHERE d.user_id = ?)", args: [user.id] },
       { sql: "DELETE FROM runs WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)", args: [user.id] },
       { sql: "DELETE FROM session_transcripts WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)", args: [user.id] },
+      { sql: "DELETE FROM device_commands WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)", args: [user.id] },
       { sql: "DELETE FROM devices WHERE user_id = ?", args: [user.id] },
       { sql: "DELETE FROM team_invites WHERE created_by = ?", args: [user.id] },
       { sql: "DELETE FROM sessions WHERE user_id = ?", args: [user.id] },

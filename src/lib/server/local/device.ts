@@ -1,18 +1,34 @@
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DeviceActivity, Tool } from "@/lib/activity";
-import type { LocalDevice, LocalRun } from "@/lib/local";
+import type { LocalDevice, LocalRun, ScheduleMode } from "@/lib/local";
 import { accountsTarget } from "@/lib/server/accounts-server";
 import { SESSION_COOKIE } from "@/lib/server/cookies";
 import { DATA_DIR } from "@/lib/server/data-dir";
-import { levelAllows, MAX_PROMPT, MODEL_NAME, REMOTE_LABEL, REMOTE_LEVELS, SESSION_ID, type DeviceInfo, type RemoteLevel, type RunJob, type RunStatus } from "@/lib/team";
+import {
+  levelAllows,
+  MAX_PROMPT,
+  MODEL_NAME,
+  REMOTE_LABEL,
+  REMOTE_LEVELS,
+  SESSION_ID,
+  SHARE_LEVELS,
+  type CommandKind,
+  type DeviceInfo,
+  type DeviceManage,
+  type RemoteLevel,
+  type RunJob,
+  type RunStatus,
+  type ShareLevel,
+  type ToolState,
+} from "@/lib/team";
 import type { Provider } from "@/lib/types";
 import pkg from "../../../../package.json";
 import { scanActivity, type Scan } from "./activity";
-import { liveState } from "./cli";
+import { liveState, readLoginPath, toolState } from "./cli";
 import { runSession, type RunReport } from "./runner";
 import { readTranscript, type TranscriptEvent } from "./transcript";
 
@@ -20,11 +36,13 @@ import { readTranscript, type TranscriptEvent } from "./transcript";
  * This computer as a device of the AI Cooldown account signed in here, once
  * its user connects it. It checks in with the server that keeps the account
  * (aicooldown.com for the desktop app, or this copy itself): what it is, which
- * accounts its CLIs are signed in with, every Claude Code and Codex session it
- * ran, and what its user allows here. Two settings are this computer's alone,
- * and it holds the server to them rather than taking it at its word: what
- * remote sessions may do (it runs the ones it is sent, one at a time), and
- * whether what sessions say (titles, and transcripts on request) leaves it.
+ * accounts its CLIs are signed in with and whether they can run, every Claude
+ * Code and Codex session it ran, and for its owner the logins it keeps and the
+ * hellos it has scheduled. Two settings are this computer's alone, and it
+ * holds the server to them rather than taking it at its word: what remote
+ * sessions may do (it runs the ones it is sent, one at a time), and who may
+ * read what sessions say (titles, and transcripts on request). Its owner can
+ * also have it switch or save a CLI login and say hello from the website.
  * data/device.json keeps its token, those settings, and a note of the remote
  * sessions it ran.
  */
@@ -34,12 +52,16 @@ const FILE = path.join(DATA_DIR, "device.json");
 const SYNC_MS = { quick: 15_000, slow: 60_000 };
 /** How often the session logs are read again; the report goes out when it changed. */
 const SCAN_MS = 2 * 60_000;
+/** What a check-in says about the CLIs and saved logins is read again after this long, or after a change here. */
+const CLIS_MS = 10_000;
 const TIMEOUT_MS = 20_000;
 const KEEP_RUNS = 20;
 
 type Link = { server: string; deviceId: string; token: string; userId: string; email: string };
-type Stored = { machineId: string; remote: RemoteLevel; share: boolean; owner: LocalDevice["owner"]; link: Link | null; runs: LocalRun[] };
+type Stored = { machineId: string; remote: RemoteLevel; share: ShareLevel; owner: LocalDevice["owner"]; link: Link | null; runs: LocalRun[] };
 type TranscriptAsk = { tool: Tool; sessionId: string };
+type CommandJob = { id: string; kind: CommandKind; args: Record<string, unknown>; by: string | null };
+type Clis = { logins: DeviceInfo["logins"]; tools: Record<Tool, ToolState>; manage: DeviceManage };
 
 type Runtime = {
   started: boolean;
@@ -54,6 +76,12 @@ type Runtime = {
   reported: string | null;
   running: { run: LocalRun; stop: AbortController } | null;
   queue: Promise<unknown>;
+  /** The latest read of the CLIs and saved logins. */
+  clis: { at: number; value: Clis } | null;
+  /** How soon the server asked to hear again: sooner while someone works with this computer from the website. */
+  pollMs: number | undefined;
+  /** Commands from the owner, one at a time. */
+  commands: Promise<unknown>;
 };
 
 // Survives dev-server module reloads, so it never checks in twice over.
@@ -69,6 +97,9 @@ const runtime = (g.__aicooldownDevice ??= {
   reported: null,
   running: null,
   queue: Promise.resolve(),
+  clis: null,
+  pollMs: undefined,
+  commands: Promise.resolve(),
 });
 
 const reason = (err: unknown) => {
@@ -76,14 +107,17 @@ const reason = (err: unknown) => {
   return cause ?? (err instanceof Error ? err.message : String(err));
 };
 
+/** Before 0.6 sharing was yes or no, and yes meant with the owner's teams. */
+const shareOf = (v: unknown): ShareLevel => (v === true ? "team" : SHARE_LEVELS.includes(v as ShareLevel) ? (v as ShareLevel) : "off");
+
 async function load(): Promise<Stored> {
   try {
-    const s = JSON.parse(await readFile(FILE, "utf8")) as Partial<Stored>;
+    const s = JSON.parse(await readFile(FILE, "utf8")) as Partial<Stored> & { share?: unknown };
     if (typeof s.machineId === "string") {
       return {
         machineId: s.machineId,
         remote: REMOTE_LEVELS.includes(s.remote as RemoteLevel) ? (s.remote as RemoteLevel) : "off",
-        share: s.share === true,
+        share: shareOf(s.share),
         owner: s.owner ?? null,
         link: s.link ?? null,
         // Runs noted before Codex could run here were Claude Code's.
@@ -93,7 +127,7 @@ async function load(): Promise<Stored> {
   } catch {
     /* not connected yet */
   }
-  return { machineId: randomUUID(), remote: "off", share: false, owner: null, link: null, runs: [] };
+  return { machineId: randomUUID(), remote: "off", share: "off", owner: null, link: null, runs: [] };
 }
 
 /** One change at a time, written whole and readable by this user only: it holds the computer's token. */
@@ -119,29 +153,44 @@ function osName(): string {
   return `${os.type()} ${os.release()}`;
 }
 
-async function deviceInfo(stored: Stored): Promise<DeviceInfo> {
-  const live = await liveState()
-    .then((s) => s.live)
-    .catch(() => null);
+/** Whose accounts the CLIs use, whether they can run, and the saved logins and hellos: labels and times, never credentials. */
+async function clis(): Promise<Clis> {
+  if (runtime.clis && Date.now() - runtime.clis.at < CLIS_MS) return runtime.clis.value;
+  const { helloState } = await import("./schedule"); // schedule.ts reads this file's state: loaded when needed, not at start
+  const [live, hellos] = await Promise.all([liveState().catch(() => null), helloState().catch(() => ({ schedules: [], runs: {} }))]);
   const login = (provider: Provider) => {
-    const l = live?.[provider];
+    const l = live?.live[provider];
     return l && "label" in l ? l.label : null;
   };
+  const state = (provider: Provider): ToolState => toolState(provider, live ? live.live[provider] : null);
+  const value: Clis = {
+    logins: { claude: login("claude"), codex: login("codex") },
+    tools: { claude: state("claude"), codex: state("codex") },
+    manage: { profiles: live?.profiles ?? [], schedules: hellos.schedules, hellos: hellos.runs },
+  };
+  runtime.clis = { at: Date.now(), value };
+  return value;
+}
+
+async function deviceInfo(stored: Stored): Promise<DeviceInfo & { manage: DeviceManage }> {
+  const { logins, tools, manage } = await clis();
   return {
     name: os.hostname(),
     os: osName(),
     platform: process.platform,
     arch: process.arch,
     version: pkg.version,
-    logins: { claude: login("claude"), codex: login("codex") },
+    logins,
     remote: stored.remote,
     share: stored.share,
+    tools,
+    manage,
   };
 }
 
 /** The activity report as it leaves this computer: without session titles unless it shares session content. */
-function report(activity: DeviceActivity, share: boolean): DeviceActivity {
-  return share ? activity : { ...activity, sessions: activity.sessions.map((s) => ({ ...s, title: null })) };
+function report(activity: DeviceActivity, share: ShareLevel): DeviceActivity {
+  return share !== "off" ? activity : { ...activity, sessions: activity.sessions.map((s) => ({ ...s, title: null })) };
 }
 
 function agentFetch(link: Link, route: string, method: string, body?: unknown): Promise<Response> {
@@ -160,8 +209,9 @@ function schedule(ms: number): void {
   runtime.timer = setTimeout(() => void tick(), ms);
 }
 
-/** Checks in right away, or right after the check-in under way. */
+/** Checks in right away, or right after the check-in under way, with what the CLIs say now. */
 function soon(): void {
+  runtime.clis = null;
   if (runtime.syncing) runtime.again = true;
   else schedule(0);
 }
@@ -172,12 +222,15 @@ async function tick(): Promise<void> {
     await sync();
   } catch (err) {
     runtime.error = `Could not check in: ${reason(err)}`;
+    runtime.pollMs = undefined;
   } finally {
     runtime.syncing = false;
   }
   const s = await load();
   if (!s.link) return; // idle until it is connected again
-  schedule(runtime.again ? 0 : s.remote !== "off" || s.share ? SYNC_MS.quick : SYNC_MS.slow);
+  const usual = s.remote !== "off" || s.share !== "off" ? SYNC_MS.quick : SYNC_MS.slow;
+  // Sooner when the server asks (someone works with this computer), never busier than every 1.5 seconds.
+  schedule(runtime.again ? 0 : runtime.pollMs ? Math.max(1_500, Math.min(runtime.pollMs, usual)) : usual);
   runtime.again = false;
 }
 
@@ -185,6 +238,7 @@ async function tick(): Promise<void> {
 export function startAgent(): void {
   if (runtime.started) return;
   runtime.started = true;
+  readLoginPath();
   schedule(0);
 }
 
@@ -192,11 +246,7 @@ async function sync(): Promise<void> {
   const stored = await load();
   const link = stored.link;
   if (!link) return;
-  if (!runtime.scan || Date.now() - runtime.scan.at > SCAN_MS) {
-    // A failed read keeps the last one: checking in matters more than the report.
-    const fresh = await scanActivity().catch(() => null);
-    if (fresh) runtime.scan = { ...fresh, at: fresh.activity.scannedAt };
-  }
+  if (!runtime.scan || Date.now() - runtime.scan.at > SCAN_MS) await rescan();
   const activity = runtime.scan ? report(runtime.scan.activity, stored.share) : null;
   const outgoing = activity && JSON.stringify(activity);
   const sending = outgoing !== null && outgoing !== runtime.reported;
@@ -209,10 +259,11 @@ async function sync(): Promise<void> {
     runtime.error = "The account disconnected this computer. It connects again when you sign in here.";
     return;
   }
-  const json = (await res.json().catch(() => ({}))) as { run?: RunJob | null; transcripts?: TranscriptAsk[]; error?: string };
+  const json = (await res.json().catch(() => ({}))) as { run?: RunJob | null; transcripts?: TranscriptAsk[]; commands?: CommandJob[]; pollMs?: number; error?: string };
   if (!res.ok) throw new Error(json.error ?? `${new URL(link.server).host} answered ${res.status}`);
   runtime.lastSync = Date.now();
   runtime.error = null;
+  runtime.pollMs = typeof json.pollMs === "number" && Number.isFinite(json.pollMs) ? json.pollMs : undefined;
   if (sending) runtime.reported = outgoing;
   if (json.run) {
     // Handed a session while running one (two check-ins crossed): say so rather than leave it hanging.
@@ -221,21 +272,86 @@ async function sync(): Promise<void> {
       void agentFetch(link, `/api/agent/runs/${encodeURIComponent(json.run.id)}`, "POST", { events: [], status: "failed", result: { error: busy } }).catch(() => undefined);
     } else void execute(json.run, link);
   }
+  for (const job of (json.commands ?? []).slice(0, 5)) {
+    runtime.commands = runtime.commands.catch(() => undefined).then(() => runCommand(link, job, stored.owner?.email ?? null));
+  }
   for (const ask of (json.transcripts ?? []).slice(0, 3)) await answerTranscript(link, ask, stored.share);
+}
+
+/** Reads the session logs again. A failed read keeps the last one: checking in matters more than the report. */
+async function rescan(): Promise<void> {
+  const fresh = await scanActivity().catch(() => null);
+  if (fresh) runtime.scan = { ...fresh, at: fresh.activity.scannedAt };
 }
 
 /**
  * Reads a session's transcript for the dashboard and sends it, if this
- * computer shares session content. Only a session from this computer's own
- * scan: the server names it, the scan says which file it is.
+ * computer shares session content (the server keeps it to whoever the
+ * computer shares with). Only a session from this computer's own scan: the
+ * server names it, the scan says which file it is.
  */
-async function answerTranscript(link: Link, ask: TranscriptAsk, share: boolean): Promise<void> {
-  const file = typeof ask.sessionId === "string" && SESSION_ID.test(ask.sessionId) ? runtime.scan?.logs.get(`${ask.tool}:${ask.sessionId}`) : undefined;
+async function answerTranscript(link: Link, ask: TranscriptAsk, share: ShareLevel): Promise<void> {
+  const logOf = () => (typeof ask.sessionId === "string" && SESSION_ID.test(ask.sessionId) ? runtime.scan?.logs.get(`${ask.tool}:${ask.sessionId}`) : undefined);
+  let file = logOf();
+  // A session newer than the last read of the logs, or a log the CLI replaced since: read them again first.
+  if (share !== "off" && (!file || !existsSync(/* turbopackIgnore: true */ file))) {
+    await rescan();
+    file = logOf();
+  }
   let answer: { events?: TranscriptEvent[]; error?: string };
-  if (!share) answer = { error: "This computer does not share session content." };
+  if (share === "off") answer = { error: "This computer does not share session content." };
   else if ((ask.tool !== "claude" && ask.tool !== "codex") || !file) answer = { error: "That session is not on this computer, or is more than 30 days old." };
   else answer = await readTranscript(ask.tool, file).then((events) => ({ events }), (err: unknown) => ({ error: `Could not read the session's log: ${reason(err)}` }));
   await agentFetch(link, "/api/agent/transcripts", "POST", { tool: ask.tool, sessionId: ask.sessionId, ...answer }).catch(() => undefined);
+}
+
+const localId = (v: unknown) => (typeof v === "string" && /^[\w-]{1,64}$/.test(v) ? v : null);
+const MODES: ScheduleMode[] = ["at", "reset", "every-reset"];
+
+/**
+ * Does what the owner asked from the website, the way the This machine panel
+ * would, and says how it went. Only its owner's commands: the server sends no
+ * others, and this checks anyway.
+ */
+async function runCommand(link: Link, job: CommandJob, owner: string | null): Promise<void> {
+  let ok = false;
+  let message: string;
+  try {
+    if (!owner || job.by !== owner) throw new Error("Only this computer's owner manages it from the website.");
+    const { actions } = await import("./schedule");
+    const a = job.args ?? {};
+    const profileId = localId(a.profileId);
+    if (job.kind === "save") {
+      if (a.provider !== "claude" && a.provider !== "codex") throw new Error("Unknown CLI.");
+      await actions.save(a.provider);
+      message = "Saved.";
+    } else if (job.kind === "cancel") {
+      const scheduleId = localId(a.scheduleId);
+      if (!scheduleId) throw new Error("Unknown scheduled hello.");
+      await actions.cancel(scheduleId);
+      message = "Cancelled.";
+    } else if (!profileId) {
+      throw new Error("Unknown saved login.");
+    } else if (job.kind === "switch") {
+      await actions.switch(profileId);
+      message = "Switched.";
+    } else if (job.kind === "hello") {
+      await actions.hello(profileId);
+      message = "Said hello: its 5-hour window is running.";
+    } else if (job.kind === "schedule") {
+      const mode = a.mode as ScheduleMode;
+      if (!MODES.includes(mode)) throw new Error("Unknown schedule.");
+      await actions.schedule(profileId, mode, typeof a.at === "number" && Number.isFinite(a.at) ? a.at : undefined);
+      message = "Scheduled.";
+    } else {
+      throw new Error("Unknown command.");
+    }
+    ok = true;
+  } catch (err) {
+    message = reason(err);
+  }
+  await agentFetch(link, "/api/agent/commands", "POST", { id: job.id, ok, message }).catch(() => undefined);
+  soon(); // the website sees the change with the next check-in
 }
 
 /** Connects this computer to the account the request is signed in with, where that account is kept. */
@@ -290,10 +406,10 @@ export async function setRemote(level: RemoteLevel): Promise<void> {
   soon();
 }
 
-/** Whether what sessions say leaves this computer. Turning it off also has the server drop the transcripts it keeps from here. */
-export async function setShare(on: boolean): Promise<void> {
+/** Who may read what sessions say. Sharing with fewer people also has the server drop the transcripts it keeps from here. */
+export async function setShare(level: ShareLevel): Promise<void> {
   await update((s) => {
-    s.share = on;
+    s.share = level;
   });
   soon();
 }
@@ -333,16 +449,32 @@ function refusal(job: RunJob, stored: Stored): string | null {
   if (job.model !== null && (typeof job.model !== "string" || !MODEL_NAME.test(job.model))) return "Unknown model.";
   const folder = typeof job.project === "string" ? runtime.scan?.folders.get(job.project) : undefined;
   if (!folder || !isDirectory(folder)) return "That project is not on this computer (any more).";
-  // Only a conversation a remote session started here, never one of this computer's own.
-  if (job.resume !== null && !(typeof job.resume === "string" && SESSION_ID.test(job.resume) && stored.runs.some((r) => r.sessionId === job.resume && r.project === job.project && r.tool === job.tool))) {
-    return "Only a session started from the dashboard can be continued.";
+  if (job.resume !== null) {
+    if (typeof job.resume !== "string" || !SESSION_ID.test(job.resume)) return "Unknown conversation.";
+    // A conversation a remote session started here, or one of this computer's own for its owner, and for
+    // the owner's teams only when it shares session content with them: the reply can tell what was said before.
+    const fromHere = stored.runs.some((r) => r.sessionId === job.resume && !r.resumed && r.project === job.project && r.tool === job.tool);
+    const own = runtime.scan?.activity.sessions.some((s) => s.id === job.resume && s.tool === job.tool && s.path === job.project);
+    const allowed = job.by !== null && (job.by === stored.owner?.email || stored.share === "team");
+    if (!fromHere && !(own && allowed)) return "That conversation cannot be continued from the website on this computer.";
   }
   return null;
 }
 
 async function execute(job: RunJob, link: Link): Promise<void> {
   const stop = new AbortController();
-  const run: LocalRun = { id: job.id, tool: job.tool, project: job.project, prompt: String(job.prompt).slice(0, 300), by: job.by, mode: job.mode, status: "running", at: Date.now(), sessionId: job.resume };
+  const run: LocalRun = {
+    id: job.id,
+    tool: job.tool,
+    project: job.project,
+    prompt: String(job.prompt).slice(0, 300),
+    by: job.by,
+    mode: job.mode,
+    status: "running",
+    at: Date.now(),
+    sessionId: job.resume,
+    resumed: job.resume !== null,
+  };
   // Set before anything is awaited: the next check-in must say it is busy.
   runtime.running = { run, stop };
   const send = async (r: RunReport) => {

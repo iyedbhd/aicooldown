@@ -1,10 +1,10 @@
 import type { InStatement } from "@libsql/client";
 import type { Tool } from "../activity";
-import { levelAllows, MAX_PROMPT, MODEL_NAME, REMOTE_LABEL, SESSION_ID, type RemoteLevel, type Run, type RunEvent, type RunEventKind, type RunJob, type RunResult, type RunStatus } from "../team";
+import { CHAT_VERSION, levelAllows, MAX_PROMPT, MODEL_NAME, REMOTE_LABEL, SESSION_ID, TOOL_NAME, versionAtLeast, type RemoteLevel, type Run, type RunEvent, type RunEventKind, type RunJob, type RunResult, type RunStatus } from "../team";
 import type { User } from "./auth";
 import { decrypt, encrypt, newId, openJson, sealJson } from "./crypto";
 import { db, ensureSchema, placeholders } from "./db";
-import { deviceById, isOnline } from "./devices";
+import { deviceById, heatDevice, isOnline } from "./devices";
 import { RequestError } from "./request-error";
 import { adminOver, seesRun } from "./teams";
 
@@ -128,15 +128,37 @@ export async function createRun(viewer: User, raw: Record<string, unknown>): Pro
   if (!device.activity?.projects.some((p) => p.path === project)) throw new RequestError(400, `Pick one of the projects ${name} reported.`);
   let resume: string | null = null;
   if (raw.resume) {
-    // Only a conversation a remote session started, never one of the owner's own sessions on that computer,
-    // and one the viewer sees: a conversation started from another team stays that team's.
-    const own = typeof raw.resume === "string" && SESSION_ID.test(raw.resume) ? raw.resume : null;
-    const found = own && (await db().execute({ sql: `${SELECT} WHERE r.device_id = ? AND r.project = ? AND r.tool = ? AND r.session_id = ? ORDER BY r.created_at DESC LIMIT 1`, args: [device.id, project, tool, own] }));
+    const id = typeof raw.resume === "string" && SESSION_ID.test(raw.resume) ? raw.resume : null;
+    // A conversation a remote session started (not one it only continued), which the viewer sees: one started from
+    // another team stays that team's, and one of the computer's own stays under the rule below however it was continued.
+    const found =
+      id &&
+      (await db().execute({
+        sql: `${SELECT} WHERE r.device_id = ? AND r.project = ? AND r.tool = ? AND r.session_id = ? AND r.resume_session IS NULL ORDER BY r.created_at LIMIT 1`,
+        args: [device.id, project, tool, id],
+      }));
     const started = found ? (found.rows[0] as Row | undefined) : undefined;
-    if (!started || !(await sees(viewer, started))) throw new RequestError(400, "Only a session started from here can be continued.");
-    resume = own;
+    const fromHere = Boolean(started && (await sees(viewer, started)));
+    // Or any of the computer's own conversations (in its CLI, the desktop apps, an IDE): for its owner, and for the
+    // admins of the owner's teams when it shares session content with them, since the reply can tell what was said before.
+    const reported = Boolean(id && device.activity?.sessions.some((s) => s.id === id && s.tool === tool && s.path === project));
+    const mayContinue = viewer.id === device.userId || device.info.share === "team";
+    if (!fromHere) {
+      if (!reported || !mayContinue) throw new RequestError(400, "Only a session started from here can be continued, or the computer owner's own sessions.");
+      if (!versionAtLeast(device.info.version, CHAT_VERSION)) throw new RequestError(409, `Update AI Cooldown on ${name} to ${CHAT_VERSION} or later to continue its own sessions from here.`);
+    }
+    resume = id;
   }
   if (!isOnline(device)) throw new RequestError(409, `${name} is offline. A session starts on a computer that is on, with AI Cooldown running.`);
+  const cli = device.info.tools[tool];
+  if (cli !== "ready") {
+    throw new RequestError(
+      409,
+      cli === "missing"
+        ? `${TOOL_NAME[tool]} is not installed on ${name}.`
+        : `${TOOL_NAME[tool]} is not signed in on ${name}. Its owner signs it in once there: AI Cooldown shows how, under This machine.`,
+    );
+  }
   if (!levelAllows(device.info.remote, mode)) {
     throw new RequestError(
       403,
@@ -160,6 +182,7 @@ export async function createRun(viewer: User, raw: Record<string, unknown>): Pro
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
     args: [id, device.id, tool, viewer.id, project, encrypt(prompt), mode, model, resume, now],
   });
+  await heatDevice(device.id);
   return { id, tool, deviceId: device.id, deviceName: name, by: viewer.email, project, prompt, mode, model, resume, status: "queued", sessionId: null, result: null, createdAt: now, startedAt: null, finishedAt: null };
 }
 

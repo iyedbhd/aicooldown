@@ -1,5 +1,6 @@
 import type { DeviceActivity, Tool } from "./activity";
 import { requestJson } from "./api";
+import type { CliProfile, HelloRun, HelloSchedule, ScheduleMode } from "./local";
 import type { Account, Provider, Usage } from "./types";
 
 /*
@@ -33,6 +34,40 @@ export function levelAllows(level: RemoteLevel, mode: RemoteLevel): boolean {
   return mode !== "off" && REMOTE_LEVELS.includes(mode) && REMOTE_LEVELS.indexOf(mode) <= REMOTE_LEVELS.indexOf(level);
 }
 
+/**
+ * Who may read what a computer's sessions say (titles, and conversations on
+ * request): nobody but the computer, its owner on the website, or the owners
+ * and admins of the owner's teams too. Set on that computer only.
+ */
+export type ShareLevel = "off" | "me" | "team";
+
+export const SHARE_LEVELS: ShareLevel[] = ["off", "me", "team"];
+
+export const SHARE_LABEL: Record<ShareLevel, string> = { off: "Private", me: "Only me", team: "Me and my teams" };
+
+export const SHARE_HELP: Record<ShareLevel, string> = {
+  off: "Sessions show on the Team page without titles, and their conversations stay on this computer.",
+  me: "You see session titles and can read and continue any conversation from the website. Your teams see sessions without titles.",
+  team: "You, and the owners and admins of your teams, see session titles and can read and continue any conversation from the website.",
+};
+
+/** Whether a computer at `level` shows what its sessions say to `viewer`: its owner, or anyone else. */
+export const sharesWith = (level: ShareLevel, owner: boolean) => level === "team" || (level === "me" && owner);
+
+/** Whether a CLI can run remote sessions on a computer: installed and signed in, installed but signed out, or not there. */
+export type ToolState = "ready" | "signed-out" | "missing";
+
+/** The AI Cooldown version a computer needs to continue its own sessions and take remote commands. */
+export const CHAT_VERSION = "0.6.0";
+
+/** Whether version `v` (x.y.z) is `min` or later. */
+export function versionAtLeast(v: string, min: string): boolean {
+  const a = v.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const b = min.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  return true;
+}
+
 /** Claude Code's model aliases, offered next to the models a computer has used. */
 export const CLAUDE_ALIASES = ["opus", "sonnet", "haiku"];
 
@@ -56,9 +91,30 @@ export type DeviceInfo = {
   /** Whose account each CLI on the computer is signed in with, by email; null when signed out. */
   logins: Record<Provider, string | null>;
   remote: RemoteLevel;
-  /** Whether it shares what its sessions say: titles, and transcripts on request. Set on that computer only. */
-  share: boolean;
+  /** Who may read what its sessions say: titles, and transcripts on request. Set on that computer only. */
+  share: ShareLevel;
+  /** Whether each CLI can run remote sessions there. */
+  tools: Record<Tool, ToolState>;
 };
+
+/**
+ * The CLI logins saved on a computer and its scheduled hellos, for its owner
+ * to manage from the website: which login each CLI uses, and when a 5-hour
+ * window starts. Emails and times only, never credentials.
+ */
+export type DeviceManage = { profiles: CliProfile[]; schedules: HelloSchedule[]; hellos: Record<string, HelloRun> };
+
+/** What the owner can have their computer do from the website. */
+export type CommandKind = "switch" | "save" | "hello" | "schedule" | "cancel";
+
+export type NewCommand =
+  | { kind: "switch" | "hello"; profileId: string }
+  | { kind: "save"; provider: Provider }
+  | { kind: "schedule"; profileId: string; mode: ScheduleMode; at?: number }
+  | { kind: "cancel"; scheduleId: string };
+
+/** A command for one computer, as the website shows it: what it was, and how it went once the computer did it. */
+export type Command = { id: string; kind: CommandKind; label: string; status: "queued" | "running" | "done" | "failed"; message: string | null; createdAt: number; finishedAt: number | null };
 
 export type Device = DeviceInfo & {
   id: string;
@@ -69,6 +125,10 @@ export type Device = DeviceInfo & {
   /** False after its link was revoked (its owner signed out other devices); it comes back when they sign in there again. */
   connected: boolean;
   activity: DeviceActivity | null;
+  /** Its saved logins and scheduled hellos: only for its owner. */
+  manage: DeviceManage | null;
+  /** The latest commands its owner sent it, newest first: only for its owner. */
+  commands: Command[];
 };
 
 /** A linked Claude or Codex account, without its tokens, and the last usage its owner's dashboard read. */
@@ -155,11 +215,29 @@ export const manages = (role: Role | null) => role === "owner" || role === "admi
 /** Whether the viewer may start sessions on this computer at all: their own, or anyone's in a team they manage. */
 export const mayRunOn = (ws: Workspace, device: Device) => device.userId === ws.me.id || manages(ws.role);
 
-/** Why a session cannot start on this computer right now, or null when it can. */
-export function unavailable(device: Device): string | null {
+/** Why a session cannot start on this computer right now (with `tool`, when given), or null when it can. */
+export function unavailable(device: Device, tool?: Tool): string | null {
   if (!device.connected) return "disconnected";
   if (!device.online) return "offline";
   if (device.remote === "off") return "remote sessions off";
+  if (tool && device.tools[tool] === "missing") return `${TOOL_NAME[tool]} is not installed there`;
+  if (tool && device.tools[tool] === "signed-out") return `${TOOL_NAME[tool]} is not signed in there`;
+  return null;
+}
+
+/**
+ * Why the viewer cannot send a message into this conversation on this
+ * computer, or null when they can: a conversation a remote session started
+ * that they see, or any of the computer's sessions for its owner, and for
+ * its owner's team admins when it shares session content with them.
+ */
+export function chatBlocked(ws: Workspace, device: Device, tool: Tool, startedHere: boolean): string | null {
+  if (!mayRunOn(ws, device)) return "Only its owner and the admins of their teams start sessions there.";
+  const why = unavailable(device, tool);
+  if (why) return `${device.name}: ${why}.`;
+  if (startedHere) return null;
+  if (!versionAtLeast(device.version, CHAT_VERSION)) return `Update AI Cooldown on ${device.name} to ${CHAT_VERSION} or later to continue its own sessions from here.`;
+  if (device.userId !== ws.me.id && device.share !== "team") return `${device.name} does not share session content with its teams, so only its owner can continue its own sessions.`;
   return null;
 }
 
@@ -179,6 +257,10 @@ export const removeDevice = (deviceId: string) => requestJson("/api/devices", { 
 export const startRun = (run: NewRun) => requestJson<{ run: Run }>("/api/runs", { method: "POST", body: run });
 export const fetchRun = (id: string, after: number) => requestJson<{ run: Run; events: RunEvent[] }>(`/api/runs/${id}?after=${after}`);
 export const cancelRun = (id: string) => requestJson(`/api/runs/${id}`, { method: "DELETE", body: {} });
+/** Asks one of your computers to do something with its CLI logins or hellos. */
+export const sendCommand = (deviceId: string, command: NewCommand) => requestJson<{ command: Command }>("/api/devices/commands", { method: "POST", body: { deviceId, ...command } });
+/** Someone is working with this computer: it checks in every few seconds for a while. */
+export const heatDevice = (deviceId: string) => requestJson("/api/devices/heat", { method: "POST", body: { deviceId } });
 /** Asks the session's computer for its transcript; `refresh` asks again for one already fetched. */
 export const requestTranscript = (deviceId: string, tool: Tool, sessionId: string, refresh: boolean) =>
   requestJson<Transcript>("/api/sessions", { method: "POST", body: { deviceId, tool, sessionId, refresh } });

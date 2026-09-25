@@ -104,7 +104,7 @@ export function LocalPanel({ now, user, onNote }: { now: number; user: SessionUs
         Only in a copy running on your computer. Connect it to your account and team, switch the login the Claude Code and Codex CLIs use in your terminal, or
         say hello to start a 5-hour window now so it resets sooner.
       </p>
-      <DevicePanel device={state.device} user={user} now={now} busy={busy} run={run} />
+      <DevicePanel device={state.device} tools={state.tools} user={user} now={now} busy={busy} run={run} />
       <div className="grid gap-4 md:grid-cols-2">
         {(["claude", "codex"] as const).map((provider) => {
           const live = state.live[provider];

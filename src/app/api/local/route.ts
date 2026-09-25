@@ -3,7 +3,7 @@ import type { ScheduleMode } from "@/lib/local";
 import { connect, disconnect, setRemote, setShare, startAgent, stopRun } from "@/lib/server/local/device";
 import { localRequestAllowed } from "@/lib/server/local/gate";
 import { actions, localState, startScheduler } from "@/lib/server/local/schedule";
-import { REMOTE_LEVELS, type RemoteLevel } from "@/lib/team";
+import { REMOTE_LEVELS, SHARE_LEVELS, type RemoteLevel, type ShareLevel } from "@/lib/team";
 import { ProviderError } from "@/lib/types";
 import { isProvider, readBody, str } from "../_lib";
 
@@ -69,8 +69,8 @@ export async function POST(req: Request) {
         await setRemote(body.level as RemoteLevel);
         break;
       case "share":
-        if (typeof body.on !== "boolean") return NextResponse.json({ error: "on is required" }, { status: 400 });
-        await setShare(body.on);
+        if (!SHARE_LEVELS.includes(body.level as ShareLevel)) return NextResponse.json({ error: "level is required" }, { status: 400 });
+        await setShare(body.level as ShareLevel);
         break;
       case "stop-run":
         stopRun();

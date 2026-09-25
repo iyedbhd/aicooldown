@@ -1,6 +1,6 @@
 import { postJson, type ApiResult } from "./api";
 import type { Tool } from "./activity";
-import type { RemoteLevel, RunStatus } from "./team";
+import type { RemoteLevel, RunStatus, ShareLevel, ToolState } from "./team";
 import type { Provider } from "./types";
 
 /**
@@ -38,7 +38,19 @@ export type HelloRun = { at: number; ok: boolean; message: string; scheduled: bo
 export type LiveLogin = { label: string; saved: boolean } | { error: string } | null;
 
 /** A remote session this computer ran, as it keeps a note of it. */
-export type LocalRun = { id: string; tool: Tool; project: string; prompt: string; by: string | null; mode: RemoteLevel; status: RunStatus; at: number; sessionId: string | null };
+export type LocalRun = {
+  id: string;
+  tool: Tool;
+  project: string;
+  prompt: string;
+  by: string | null;
+  mode: RemoteLevel;
+  status: RunStatus;
+  at: number;
+  sessionId: string | null;
+  /** It continued a conversation rather than starting one. */
+  resumed?: boolean;
+};
 
 /** This computer as a device of an AI Cooldown account (server/local/device.ts). */
 export type LocalDevice = {
@@ -48,8 +60,8 @@ export type LocalDevice = {
   owner: { userId: string; email: string } | null;
   /** What remote sessions may do here. Only ever set on this computer. */
   remote: RemoteLevel;
-  /** Whether what its sessions say (titles, and transcripts on request) leaves this computer. Only ever set here. */
-  share: boolean;
+  /** Who may read what its sessions say (titles, and transcripts on request) on the website. Only ever set here. */
+  share: ShareLevel;
   lastSync: number | null;
   error: string | null;
   running: LocalRun | null;
@@ -65,6 +77,8 @@ export type LocalState = {
   runs: Record<string, HelloRun>;
   /** Where signing in keeps accounts, e.g. "aicooldown.com"; null for this copy's own database. */
   accountsServer: string | null;
+  /** Whether each CLI can run remote sessions here, and what to run in a terminal to sign it in. */
+  tools: Record<Provider, { state: ToolState; signIn: string }>;
   device: LocalDevice;
 };
 
@@ -77,7 +91,7 @@ export type LocalAction =
   /** `forget` also forgets who connected it, so it does not reconnect when they sign in again. */
   | { action: "disconnect"; forget: boolean }
   | { action: "remote"; level: RemoteLevel }
-  | { action: "share"; on: boolean }
+  | { action: "share"; level: ShareLevel }
   | { action: "stop-run" };
 
 /** null when this copy is not running locally (the route answers 404). */

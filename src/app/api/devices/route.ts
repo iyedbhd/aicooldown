@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { parseInfo, registerDevice, removeDevice } from "@/lib/server/devices";
+import { registerDevice, removeDevice } from "@/lib/server/devices";
 import { str } from "../_lib";
 import { userRoute } from "../_session";
 
@@ -12,7 +12,7 @@ export const runtime = "nodejs";
  */
 export function POST(req: Request) {
   return userRoute(req, { write: true }, async (user, body) => {
-    const { id, token } = await registerDevice(user.id, body.machineId, parseInfo(body.info));
+    const { id, token } = await registerDevice(user.id, body.machineId, body.info);
     return NextResponse.json({ device: { id }, token, user });
   });
 }

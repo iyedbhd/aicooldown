@@ -24,7 +24,7 @@ import { livePlace } from "./cli";
 
 const DAYS = 30;
 const CACHE_FILE = path.join(DATA_DIR, "activity-cache.json");
-const CACHE_VERSION = 4;
+const CACHE_VERSION = 5;
 /** Sessions reported, most recently active first. */
 const MAX_SESSIONS = 300;
 /** A title or first prompt is cut to this. */
@@ -49,6 +49,8 @@ type FileSummary = {
   parent: string | null;
   source: string | null;
   branch: string | null;
+  /** The model of its latest reply. */
+  model: string | null;
   startedAt: number;
   lastActive: number;
   title: string | null;
@@ -61,11 +63,12 @@ const count = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v 
 const text = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
 const clip = (s: string) => (s.length > TITLE_MAX ? `${s.slice(0, TITLE_MAX - 1)}…` : s).replace(/\s+/g, " ").trim();
 
-const emptySummary = (): FileSummary => ({ cwd: null, session: null, parent: null, source: null, branch: null, startedAt: 0, lastActive: 0, title: null, prompt: null, rows: {} });
+const emptySummary = (): FileSummary => ({ cwd: null, session: null, parent: null, source: null, branch: null, model: null, startedAt: 0, lastActive: 0, title: null, prompt: null, rows: {} });
 
 function add(summary: FileSummary, at: number, branch: unknown, model: string, counts: Counts): void {
   if (at >= summary.lastActive) {
     summary.lastActive = at;
+    summary.model = model;
     if (typeof branch === "string" && branch) summary.branch = branch;
   }
   if (!summary.startedAt || at < summary.startedAt) summary.startedAt = at;
@@ -382,13 +385,14 @@ export async function scanActivity(): Promise<Scan> {
       ids.add(id);
       const own = tool === "codex" ? id === summary.session : depth <= 2;
       const key = `${tool}:${id}`;
-      const s: SessionSum = sessions.get(key) ?? { tool, id, path: shown, title: null, branch: null, source: null, startedAt: 0, lastActive: 0, subagents: 0, models: new Map() };
+      const s: SessionSum = sessions.get(key) ?? { tool, id, path: shown, title: null, branch: null, source: null, model: null, startedAt: 0, lastActive: 0, subagents: 0, models: new Map() };
       sessions.set(key, s);
       if (own) {
         logs.set(key, file);
         s.path = shown; // a sub-agent may have started elsewhere: the session is where its own log says
         s.title = (tool === "codex" ? names.get(id) : null) ?? summary.title ?? summary.prompt ?? s.title;
         s.source = summary.source ?? s.source;
+        s.model = summary.model ?? s.model; // the conversation's own model: subagents often run a smaller one
       } else s.subagents += 1;
       if (summary.startedAt && (!s.startedAt || summary.startedAt < s.startedAt)) s.startedAt = summary.startedAt;
       if (summary.lastActive >= s.lastActive) {

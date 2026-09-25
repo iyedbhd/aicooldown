@@ -1,17 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatAgo } from "@/lib/format";
-import type { LocalAction, LocalDevice } from "@/lib/local";
+import type { LocalAction, LocalDevice, LocalState } from "@/lib/local";
 import type { SessionUser } from "@/lib/session";
-import { REMOTE_HELP, REMOTE_LABEL, REMOTE_LEVELS, type RemoteLevel } from "@/lib/team";
+import { REMOTE_HELP, REMOTE_LABEL, REMOTE_LEVELS, SHARE_HELP, SHARE_LABEL, SHARE_LEVELS, TOOL_NAME, type RemoteLevel, type ShareLevel } from "@/lib/team";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
 import { StatusChip } from "./TeamBits";
 
 type Props = {
   device: LocalDevice;
+  /** Whether each CLI can run remote sessions here, and how to sign it in. */
+  tools: LocalState["tools"];
   user: SessionUser | null;
   now: number;
   busy: string | null;
@@ -24,7 +26,7 @@ type Props = {
  * its sessions say, and what remote sessions may do here. Only this computer
  * decides those two.
  */
-export function DevicePanel({ device, user, now, busy, run }: Props) {
+export function DevicePanel({ device, tools, user, now, busy, run }: Props) {
   const reconnecting = useRef(false);
   const disabled = busy !== null;
   const mine = Boolean(user && device.owner?.userId === user.id);
@@ -36,22 +38,27 @@ export function DevicePanel({ device, user, now, busy, run }: Props) {
     void run("connect", { action: "connect" });
   }, [mine, device.linked, run]);
 
-  function setShare(on: boolean) {
-    if (on === device.share) return;
-    if (
-      on &&
-      !window.confirm(
-        "Share what the Claude Code and Codex sessions on this computer say?\n\n" +
-          "You, and the owners and admins of your teams, then see each session's title (or its first prompt) on the Team page, and can have any session's " +
-          "conversation sent there: prompts, replies, the commands run and what they printed, which can include code, file contents and anything else a " +
-          "session saw. A conversation is sent only when someone asks for it, and kept there a week.",
-      )
-    )
-      return;
+  function setShare(level: ShareLevel) {
+    if (level === device.share) return;
+    const what =
+      "each session's title (or its first prompt) on the Team page, and can have any session's conversation sent there, and continue it: prompts, replies, " +
+      "the commands run and what they printed, which can include code, file contents and anything else a session saw. A conversation is sent only when " +
+      "asked for, and kept there a week.";
+    const question =
+      level === "team"
+        ? `Share what the Claude Code and Codex sessions on this computer say with your teams?\n\nYou, and the owners and admins of your teams, then see ${what}`
+        : level === "me" && device.share === "off"
+          ? `Let yourself read what the sessions on this computer say from the website?\n\nSigned in as you, you then see ${what} Nobody else does.`
+          : null;
+    if (question && !window.confirm(question)) return;
     void run(
-      `share-${on}`,
-      { action: "share", on },
-      on ? "This computer shares session content now." : "Session content stays on this computer again; what it sent is deleted from the Team page.",
+      `share-${level}`,
+      { action: "share", level },
+      level === "off"
+        ? "Session content stays on this computer again; what it sent is deleted from the Team page."
+        : level === "me"
+          ? "Only you see what this computer's sessions say on the website now."
+          : "This computer shares session content with your teams now.",
     );
   }
 
@@ -109,27 +116,23 @@ export function DevicePanel({ device, user, now, busy, run }: Props) {
 
         <div>
           <p className="eyebrow">session content</p>
-          <div role="radiogroup" aria-label="Share session content" className="mt-1.5 inline-flex gap-0.5 rounded-lg border border-line bg-panel-2 p-0.5">
-            {[false, true].map((on) => (
+          <div role="radiogroup" aria-label="Who may read what sessions say" className="mt-1.5 inline-flex flex-wrap gap-0.5 rounded-lg border border-line bg-panel-2 p-0.5">
+            {SHARE_LEVELS.map((level) => (
               <button
-                key={String(on)}
+                key={level}
                 type="button"
                 role="radio"
-                aria-checked={device.share === on}
+                aria-checked={device.share === level}
                 disabled={disabled}
-                onClick={() => setShare(on)}
-                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition ${device.share === on ? (on ? "bg-amber-500/15 text-amber-700 dark:text-amber-300" : "bg-panel-3 text-fg") : "text-muted hover:text-fg-2"}`}
+                onClick={() => setShare(level)}
+                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition ${device.share === level ? (level === "team" ? "bg-amber-500/15 text-amber-700 dark:text-amber-300" : "bg-panel-3 text-fg") : "text-muted hover:text-fg-2"}`}
               >
-                <Icon name={on ? "eye" : "lock"} size={11} />
-                {on ? "Shared" : "Private"}
+                <Icon name={level === "off" ? "lock" : level === "me" ? "user" : "eye"} size={11} />
+                {SHARE_LABEL[level]}
               </button>
             ))}
           </div>
-          <p className="mt-1.5 text-[11px] text-faint">
-            {device.share
-              ? "Session titles show on the Team page, and you and your teams' owners and admins can have a session's conversation sent there (prompts, replies, commands and their output). Only when asked; kept a week."
-              : "Sessions show on the Team page without titles, and their conversations stay on this computer."}
-          </p>
+          <p className="mt-1.5 text-[11px] text-faint">{SHARE_HELP[device.share]} Continuing a conversation from the website also needs remote sessions allowed below.</p>
         </div>
 
         <div>
@@ -149,6 +152,7 @@ export function DevicePanel({ device, user, now, busy, run }: Props) {
               </button>
             ))}
           </div>
+          {device.remote !== "off" && <SignInHints tools={tools} />}
           <p className="mt-1.5 text-[11px] text-faint">
             {REMOTE_HELP[device.remote]}
             {device.remote !== "off" &&
@@ -196,6 +200,44 @@ export function DevicePanel({ device, user, now, busy, run }: Props) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** A CLI that cannot run remote sessions here, and how to fix that: sign it in once, in a terminal on this computer. */
+function SignInHints({ tools }: { tools: LocalState["tools"] }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const waiting = (["claude", "codex"] as const).filter((p) => tools[p].state !== "ready");
+  if (waiting.length === 0) return null;
+  async function copy(command: string) {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(command);
+    } catch {
+      window.prompt("Copy this command:", command);
+    }
+  }
+  return (
+    <div className="mt-2 space-y-1.5">
+      {waiting.map((p) => (
+        <div key={p} className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] text-fg-2">
+          <p className="flex items-center gap-1.5">
+            <ProviderGlyph provider={p} size={12} />
+            {tools[p].state === "missing"
+              ? `${TOOL_NAME[p]} is not installed here, so remote ${TOOL_NAME[p]} sessions cannot run. Install its CLI or desktop app.`
+              : `${TOOL_NAME[p]} is not signed in for remote sessions here (the desktop app's own sign-in does not count). Sign it in once, in a terminal on this computer:`}
+          </p>
+          {tools[p].state === "signed-out" && (
+            <div className="mt-1 flex items-center gap-2">
+              <code className="min-w-0 flex-1 truncate rounded bg-panel-2 px-2 py-1 font-mono text-[11px] text-fg">{tools[p].signIn}</code>
+              <button type="button" onClick={() => void copy(tools[p].signIn)} className="btn">
+                <Icon name={copied === tools[p].signIn ? "check" : "copy"} />
+                {copied === tools[p].signIn ? "Copied" : "Copy"}
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

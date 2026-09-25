@@ -2,9 +2,10 @@ import { db } from "./db";
 
 /*
  * How long what passes through for teams is kept: remote sessions with their
- * output for 30 days, conversations read from computers for a week. Deleted
- * as the server goes about its work (the team page loading, computers checking
- * in), at most every ten minutes per server instance.
+ * output for 30 days, conversations read from computers and commands sent to
+ * them for a week. Deleted as the server goes about its work (the team page
+ * loading, computers checking in), at most every ten minutes per server
+ * instance.
  */
 
 const RUNS_KEEP_MS = 30 * 86400_000;
@@ -24,6 +25,7 @@ export async function purgeExpired(): Promise<void> {
         { sql: "DELETE FROM run_events WHERE run_id IN (SELECT id FROM runs WHERE created_at < ?)", args: [now - RUNS_KEEP_MS] },
         { sql: "DELETE FROM runs WHERE created_at < ?", args: [now - RUNS_KEEP_MS] },
         { sql: "DELETE FROM session_transcripts WHERE updated_at < ?", args: [now - TRANSCRIPTS_KEEP_MS] },
+        { sql: "DELETE FROM device_commands WHERE created_at < ?", args: [now - TRANSCRIPTS_KEEP_MS] },
       ],
       "write",
     )

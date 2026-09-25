@@ -78,8 +78,22 @@ CREATE TABLE IF NOT EXISTS devices (
   activity TEXT,
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
+  hot_until INTEGER NOT NULL DEFAULT 0,
   UNIQUE (user_id, machine_id)
 );
+CREATE TABLE IF NOT EXISTS device_commands (
+  id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  created_by TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  args TEXT NOT NULL,
+  label TEXT NOT NULL,
+  status TEXT NOT NULL,
+  message TEXT,
+  created_at INTEGER NOT NULL,
+  finished_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS device_commands_device ON device_commands(device_id, created_at);
 CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY,
   device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -125,7 +139,7 @@ CREATE TABLE IF NOT EXISTS session_transcripts (
  * Columns added to a table after it first existed somewhere: each runs once
  * per database, and "duplicate column" means it already has.
  */
-const MIGRATIONS = ["ALTER TABLE runs ADD COLUMN tool TEXT NOT NULL DEFAULT 'claude'"];
+const MIGRATIONS = ["ALTER TABLE runs ADD COLUMN tool TEXT NOT NULL DEFAULT 'claude'", "ALTER TABLE devices ADD COLUMN hot_until INTEGER NOT NULL DEFAULT 0"];
 
 /**
  * Where the data lives: the libSQL server in the environment (TURSO_* are what

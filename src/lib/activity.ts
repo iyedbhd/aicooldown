@@ -52,6 +52,8 @@ export type SessionActivity = {
   branch: string | null;
   /** Where it ran, as the CLI records it: "cli", "claude-desktop", "vscode", "Codex Desktop", "codex_exec" and so on. */
   source: string | null;
+  /** The model its latest reply came from: what continuing it uses unless asked otherwise. */
+  model: string | null;
   startedAt: number;
   lastActive: number;
   usage: ModelUsage[];

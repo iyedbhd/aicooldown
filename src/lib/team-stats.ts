@@ -11,8 +11,10 @@ export type SessionRow = SessionActivity & {
   /** Its project's name, as the Projects tab groups them. */
   project: string;
   totals: Totals;
-  /** The remote session that ran it, when one did (the latest, for a continued conversation). */
+  /** The latest remote session in it, when there was one: its first turn, or a message sent from here since. */
   run: Run | null;
+  /** Whether its first turn was a remote session. */
+  started: boolean;
   active: boolean;
 };
 
@@ -21,9 +23,12 @@ const keyOf = (deviceId: string, tool: Tool, id: string) => `${deviceId}:${tool}
 /** Every Claude Code and Codex session on the computers the viewer may see, most recently active first. */
 export function allSessions(ws: Workspace, now: number): SessionRow[] {
   const runs = new Map<string, Run>();
+  const started = new Set<string>();
   for (const r of ws.runs) {
     const key = r.sessionId && keyOf(r.deviceId, r.tool, r.sessionId);
-    if (key && !runs.has(key)) runs.set(key, r); // newest first: a continued conversation keeps its latest run
+    if (!key) continue;
+    if (!runs.has(key)) runs.set(key, r); // newest first: a continued conversation keeps its latest run
+    if (r.resume === null) started.add(key);
   }
   return ws.members
     .flatMap((member) =>
@@ -39,6 +44,7 @@ export function allSessions(ws: Workspace, now: number): SessionRow[] {
             project: projects.get(`${s.tool}:${s.path}`) ?? s.path.split("/").pop() ?? s.path,
             totals: sumRows(s.usage),
             run: runs.get(key) ?? null,
+            started: started.has(key),
             active: now - s.lastActive < ACTIVE_MS,
           };
         });
@@ -72,8 +78,8 @@ const SOURCES: Record<string, string> = {
   codex_vscode: "VS Code",
 };
 
-/** Where a session ran, in words: "remote" for one started from the dashboard. */
-export const sourceLabel = (s: Pick<SessionRow, "source" | "run">) => (s.run ? "remote" : s.source ? (SOURCES[s.source] ?? s.source) : "—");
+/** Where a session ran, in words: "remote" for one started from the dashboard, and what it started in otherwise. */
+export const sourceLabel = (s: Pick<SessionRow, "source" | "started">) => (s.started ? "remote" : s.source ? (SOURCES[s.source] ?? s.source) : "—");
 
 /*
  * What the team page adds up from a workspace: totals over a period, tokens

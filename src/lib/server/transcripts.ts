@@ -1,9 +1,9 @@
 import type { Tool } from "../activity";
-import { SESSION_ID, type RunEventKind, type Transcript } from "../team";
+import { SESSION_ID, sharesWith, type RunEventKind, type Transcript } from "../team";
 import type { User } from "./auth";
 import { decrypt, encrypt } from "./crypto";
 import { db, ensureSchema } from "./db";
-import { deviceById, type DeviceRecord } from "./devices";
+import { deviceById, heatDevice, type DeviceRecord } from "./devices";
 import { RequestError } from "./request-error";
 import { adminOver } from "./teams";
 
@@ -65,7 +65,14 @@ export async function requestTranscript(viewer: User, raw: Record<string, unknow
   const k = keyOf(raw);
   await ensureSchema();
   const device = await visibleDevice(viewer, k.deviceId);
-  if (!device.info.share) throw new RequestError(403, `${device.info.name} does not share session content. Its owner can turn that on in AI Cooldown there, under This machine.`);
+  if (!sharesWith(device.info.share, viewer.id === device.userId)) {
+    throw new RequestError(
+      403,
+      device.info.share === "me"
+        ? `${device.info.name} shares session content with its owner only.`
+        : `${device.info.name} does not share session content. Its owner can turn that on in AI Cooldown there, under This machine.`,
+    );
+  }
   if (!device.activity?.sessions.some((s) => s.tool === k.tool && s.id === k.sessionId)) throw new RequestError(404, "That session is not among the ones this computer reported.");
   const now = Date.now();
   const existing = (await find(k)).rows[0] as Row | undefined;
@@ -86,6 +93,7 @@ export async function requestTranscript(viewer: User, raw: Record<string, unknow
     ],
     "write",
   );
+  await heatDevice(device.id);
   return toTranscript((await find(k)).rows[0] as Row);
 }
 
@@ -94,8 +102,8 @@ export async function getTranscript(viewer: User, raw: Record<string, unknown>):
   const k = keyOf(raw);
   await ensureSchema();
   const device = await visibleDevice(viewer, k.deviceId);
-  // Stopped sharing: what it sent is being dropped, and is not shown meanwhile.
-  if (!device.info.share) return null;
+  // Stopped sharing (with the viewer): what it sent is being dropped, and is not shown meanwhile.
+  if (!sharesWith(device.info.share, viewer.id === device.userId)) return null;
   const now = Date.now();
   await db().execute({
     sql: "UPDATE session_transcripts SET status = 'failed', error = ?, updated_at = ? WHERE device_id = ? AND status = 'pending' AND requested_at < ?",

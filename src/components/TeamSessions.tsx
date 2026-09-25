@@ -3,11 +3,10 @@
 import { useState } from "react";
 import { formatTokens, type Tool } from "@/lib/activity";
 import { formatAgo, formatMoney } from "@/lib/format";
-import { mayRunOn, REMOTE_LABEL, TOOL_NAME, type Run, type Workspace } from "@/lib/team";
+import { REMOTE_LABEL, TOOL_NAME, type Run, type Workspace } from "@/lib/team";
 import { liveNow, sourceLabel, type SessionRow } from "@/lib/team-stats";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
-import { RunForm } from "./RunPanel";
 import { Avatar, Card, Empty, StatusChip } from "./TeamBits";
 
 /** Which sessions the list shows. The console keeps it, so other tabs can link to a person's, a computer's or a project's sessions. */
@@ -21,9 +20,8 @@ type Props = {
   now: number;
   filter: SessionFilter;
   onFilter: (filter: SessionFilter) => void;
-  /** The computer to start a session on, when one was picked on the Computers tab. */
-  deviceId: string | undefined;
-  onStarted: (run: Run) => void;
+  /** A new conversation on one of the computers, when the viewer may start one. */
+  onNewChat: (() => void) | undefined;
   onOpenRun: (id: string) => void;
   onOpenSession: (key: string) => void;
 };
@@ -44,10 +42,10 @@ function matches(s: SessionRow, f: SessionFilter, needle: string): boolean {
 
 /**
  * Every Claude Code and Codex session on the computers the viewer may see:
- * what runs now, then all of them with filters. Below, starting a session on a
- * computer from here, and the ones started this way.
+ * what runs now, then all of them with filters, each opening as a chat to
+ * read and continue. Below, the ones started from here.
  */
-export function TeamSessions({ ws, sessions, now, filter, onFilter, deviceId, onStarted, onOpenRun, onOpenSession }: Props) {
+export function TeamSessions({ ws, sessions, now, filter, onFilter, onNewChat, onOpenRun, onOpenSession }: Props) {
   const [shown, setShown] = useState(PAGE);
   const set = (patch: Partial<SessionFilter>) => {
     onFilter({ ...filter, ...patch });
@@ -61,12 +59,29 @@ export function TeamSessions({ ws, sessions, now, filter, onFilter, deviceId, on
   const devices = ws.members.flatMap((m) => m.devices);
   const projects = [...new Set(sessions.map((s) => s.project))].sort((a, b) => a.localeCompare(b));
   const filtering = JSON.stringify(filter) !== JSON.stringify(NO_FILTER);
-  const privateComputers = devices.filter((d) => !d.share).length;
-  const runnable = devices.some((d) => mayRunOn(ws, d));
+  const privateComputers = devices.filter((d) => d.share === "off" || (d.share === "me" && d.userId !== ws.me.id)).length;
   const team = Boolean(ws.team);
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-panel px-4 py-3">
+        <p className="min-w-0 flex-1 text-sm text-muted">
+          Open any session to read it and send the next message: the computer runs it as the next turn of the same conversation, whether it started in a terminal,
+          an IDE, the Claude or Codex desktop apps, or here.
+        </p>
+        {onNewChat ? (
+          <button type="button" onClick={onNewChat} className="btn btn-primary">
+            <Icon name="terminal" />
+            New chat
+          </button>
+        ) : (
+          <span className="text-[11px] text-faint">
+            {team ? "Only the team's owner and admins start sessions on other people's computers. " : ""}Connect a computer and allow remote sessions on it, under This
+            machine in AI Cooldown there.
+          </span>
+        )}
+      </div>
+
       {(live.sessions.length > 0 || live.runs.length > 0) && (
         <Card title={`Live now · ${live.sessions.length + live.runs.length}`} action={<span className="font-mono text-[11px] text-faint">active in the last 5 min</span>}>
           <ul className="divide-y divide-line">
@@ -122,7 +137,7 @@ export function TeamSessions({ ws, sessions, now, filter, onFilter, deviceId, on
           </select>
           <label className="flex items-center gap-1.5 text-xs text-muted">
             <input type="checkbox" checked={filter.remoteOnly} onChange={(e) => set({ remoteOnly: e.target.checked })} />
-            started from here
+            with messages from here
           </label>
           <input
             type="search"
@@ -142,7 +157,7 @@ export function TeamSessions({ ws, sessions, now, filter, onFilter, deviceId, on
           <p className="flex items-center gap-1.5 border-b border-line px-4 py-2 text-[11px] text-faint">
             <Icon name="lock" size={11} className="shrink-0" />
             {privateComputers === devices.length ? (devices.length === 1 ? "This computer keeps" : "These computers keep") : `${privateComputers} of ${devices.length} computers keep`}{" "}
-            what their sessions say private: their sessions show without titles, and their conversations can&apos;t be read here.
+            what their sessions say from you: their sessions show without titles, and what was said before can&apos;t be read here.
           </p>
         )}
         {filtered.length === 0 ? (
@@ -167,20 +182,6 @@ export function TeamSessions({ ws, sessions, now, filter, onFilter, deviceId, on
             </button>
           </div>
         )}
-      </Card>
-
-      <Card title="Start a session on a computer">
-        <div className="px-4 py-4">
-          {runnable ? (
-            // Keyed by the computer asked for, so choosing "New session" on another computer starts the form over.
-            <RunForm key={deviceId ?? "any"} ws={ws} deviceId={deviceId} onStarted={onStarted} />
-          ) : (
-            <p className="text-sm text-muted">
-              {team ? "Only the team's owner and admins start sessions on other people's computers. " : ""}Connect a computer and allow remote sessions on it in AI
-              Cooldown there, under This machine, to start Claude Code or Codex sessions from here.
-            </p>
-          )}
-        </div>
       </Card>
 
       <Card title="Started from here" action={<span className="font-mono text-[11px] text-faint">kept 30 days</span>}>
