@@ -3,7 +3,20 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchSession, type SessionUser } from "@/lib/session";
-import { createTeam, deleteTeam, fetchTeams, fetchWorkspace, manages, mayRunOn, removeMember, renameTeam, type TeamSummary, type Workspace } from "@/lib/team";
+import {
+  changeSharing,
+  createTeam,
+  deleteTeam,
+  fetchTeams,
+  fetchWorkspace,
+  manages,
+  mayRunOn,
+  removeMember,
+  renameTeam,
+  type SharingChange,
+  type TeamSummary,
+  type Workspace,
+} from "@/lib/team";
 import { allSessions, liveNow, PERIODS, type Period } from "@/lib/team-stats";
 import { AuthDialog } from "./AuthDialog";
 import { ChatPanel, type ChatTarget } from "./ChatPanel";
@@ -39,6 +52,63 @@ function storedScope(): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * What the team's owners and admins see of your work: all of it, as a member,
+ * or, as an owner or admin, everything or the projects and chats you pick.
+ */
+function SharingLine({ ws, onShare }: { ws: Workspace; onShare: (change: SharingChange) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  if (!ws.team || !ws.role) return null;
+  if (ws.role === "member") {
+    return (
+      <p className="mt-2 flex max-w-3xl items-start gap-1.5 text-xs text-muted">
+        <Icon name="eye" size={12} className="mt-0.5 shrink-0" />
+        As a member, the team&apos;s owner and admins see all your work on the computers you connect: every project and session, what your sessions say included, and
+        they can continue those sessions where you allow remote sessions.
+      </p>
+    );
+  }
+  const { all, projects, sessions } = ws.sharing;
+  async function choose(everything: boolean) {
+    if (everything === all) return;
+    if (
+      everything &&
+      !window.confirm(
+        "Show the other owners and admins of your teams all of your work? They then see every project and session on your computers, what those sessions say where your computers let that reach the website, and can continue those sessions where you allow remote sessions.",
+      )
+    )
+      return;
+    setBusy(true);
+    await onShare({ all: everything });
+    setBusy(false);
+  }
+  const picked = [projects.length && `${projects.length} project${projects.length === 1 ? "" : "s"}`, sessions.length && `${sessions.length} chat${sessions.length === 1 ? "" : "s"}`].filter(Boolean);
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+      <span className="flex items-start gap-1.5">
+        <Icon name={all ? "eye" : "lock"} size={12} className="mt-0.5 shrink-0" />
+        What the team&apos;s other owners and admins see of your work:
+      </span>
+      <div role="radiogroup" aria-label="What you share" className="inline-flex gap-0.5 rounded-lg border border-line bg-panel p-0.5">
+        {[false, true].map((everything) => (
+          <button
+            key={String(everything)}
+            type="button"
+            role="radio"
+            aria-checked={all === everything}
+            disabled={busy}
+            onClick={() => void choose(everything)}
+            className={`rounded-md px-2 py-0.5 transition ${all === everything ? "bg-panel-3 text-fg" : "text-muted hover:text-fg-2"}`}
+          >
+            {everything ? "Everything" : "What you pick"}
+          </button>
+        ))}
+      </div>
+      {!all && <span className="text-faint">{picked.length ? `${picked.join(" and ")} shared` : "nothing yet: share projects on the Projects tab, and chats from their details"}</span>}
+    </div>
+  );
 }
 
 /**
@@ -144,6 +214,17 @@ export function TeamConsole() {
   const reload = useCallback(async () => {
     await Promise.all([loadWorkspace(), refreshTeams()]);
   }, [loadWorkspace, refreshTeams]);
+
+  /** Shares or stops sharing some of your work with the other owners and admins of your teams. */
+  const share = useCallback(
+    async (change: SharingChange) => {
+      const res = await changeSharing(change);
+      if (!res.ok) return flash(res.error);
+      setWs((w) => (w ? { ...w, sharing: res.data.sharing } : w));
+      await loadWorkspace();
+    },
+    [flash, loadWorkspace],
+  );
 
   async function submitTeam(e: React.FormEvent) {
     e.preventDefault();
@@ -312,6 +393,7 @@ export function TeamConsole() {
                     {ws.members.length} {ws.members.length === 1 ? "person" : "people"}
                     {manages(ws.role) ? ` · ${devices.length} computer${devices.length === 1 ? "" : "s"}, ${devices.filter((d) => d.online).length} online` : ""}
                   </p>
+                  <SharingLine ws={ws} onShare={share} />
                 </>
               ) : (
                 <>
@@ -403,7 +485,7 @@ export function TeamConsole() {
             {ws && tab === "computers" && (
               <TeamComputers ws={ws} sessions={sessions} period={period} now={now} reload={reload} flash={flash} onNewChat={newChat} onShowSessions={showSessions} />
             )}
-            {ws && tab === "projects" && <TeamProjects ws={ws} period={period} now={now} onShowSessions={showSessions} />}
+            {ws && tab === "projects" && <TeamProjects ws={ws} period={period} now={now} onShowSessions={showSessions} onShare={share} />}
             {ws && tab === "sessions" && (
               <TeamSessions
                 ws={ws}
@@ -429,6 +511,7 @@ export function TeamConsole() {
           target={chat}
           onClose={() => setChat(null)}
           onChanged={() => void loadWorkspace()}
+          onShare={share}
         />
       )}
       {showAuth && (

@@ -1,15 +1,16 @@
 import type { DeviceActivity, ModelUsage, ProjectActivity, SessionActivity, TokenRow } from "../activity";
 import type { CliProfile, HelloRun, HelloSchedule, ScheduleMode } from "../local";
-import { MODEL_NAME, REMOTE_LEVELS, SESSION_ID, SHARE_LEVELS, sharesWith, type Device, type DeviceInfo, type DeviceManage, type RemoteLevel, type ShareLevel, type ToolState } from "../team";
+import { MODEL_NAME, REMOTE_LEVELS, SESSION_ID, SHARE_NOTHING, type Device, type DeviceInfo, type DeviceManage, type RemoteLevel, type SharePolicy, type ShareLevel, type ToolState } from "../team";
 import { newId, openJson, randomToken, sealJson, sha256 } from "./crypto";
 import { db, ensureSchema, placeholders } from "./db";
 import { RequestError } from "./request-error";
+import { forgetDevice, visibleActivity } from "./sharing";
 
 /*
  * Computers running AI Cooldown that their owner connected to their account.
  * Each holds its own token (only its hash is stored here) and checks in on its
  * own: what it is, which accounts its CLIs are signed in with, what it lets
- * remote sessions do and who may read what its sessions say, the token usage
+ * remote sessions do and whether what its sessions say reaches the website, the token usage
  * of the projects it works on, and for its owner, its saved CLI logins and
  * scheduled hellos. What it says is kept encrypted, like provider tokens.
  */
@@ -36,7 +37,7 @@ export type DeviceRecord = {
   /** Until when it should check in every few seconds: someone is working with it. */
   hotUntil: number;
   connected: boolean;
-  /** With session titles when the computer shares them with anyone; who sees them is up to listDevices. */
+  /** With session titles when the computer lets them reach the website; who sees which sessions is up to listDevices. */
   activity: DeviceActivity | null;
   createdAt: number;
 };
@@ -65,7 +66,8 @@ const count = (v: unknown): number => (typeof v === "number" && Number.isFinite(
 
 const TOOL_STATES: ToolState[] = ["ready", "signed-out", "missing"];
 /** AI Cooldown before 0.6 said yes or no to sharing, which meant with the owner's teams. */
-const shareOf = (v: unknown): ShareLevel => (v === true ? "team" : SHARE_LEVELS.includes(v as ShareLevel) ? (v as ShareLevel) : "off");
+/** Before 0.7 on was "me" or "team", and before 0.6 true. */
+const shareOf = (v: unknown): ShareLevel => (v === "on" || v === "me" || v === "team" || v === true ? "on" : "off");
 /** Before 0.6 computers did not say: as then, a session finds out when it runs. */
 const toolOf = (v: unknown): ToolState => (TOOL_STATES.includes(v as ToolState) ? (v as ToolState) : "ready");
 
@@ -268,19 +270,19 @@ export async function deviceById(id: string): Promise<DeviceRecord | null> {
 }
 
 /**
- * These users' devices as `viewerId` sees them, most recently seen first:
- * session titles where the computer shares them with the viewer, and its
+ * These users' devices as `viewerId` sees them, most recently seen first: the
+ * projects and sessions each owner's grant shows (see sharing.ts), and the
  * saved logins and scheduled hellos for its owner only (the workspace adds
  * the owner's commands).
  */
-export async function listDevices(userIds: string[], viewerId: string): Promise<Device[]> {
+export async function listDevices(userIds: string[], viewerId: string, grants: Map<string, SharePolicy>): Promise<Device[]> {
   await ensureSchema();
   const res = await db().execute({ sql: `SELECT * FROM devices WHERE user_id IN (${placeholders(userIds.length)}) ORDER BY last_seen_at DESC`, args: userIds });
   const now = Date.now();
   return res.rows.map((r) => {
     const d = toRecord(r as Row);
     const own = d.userId === viewerId;
-    const activity = d.activity && !sharesWith(d.info.share, own) ? { ...d.activity, sessions: d.activity.sessions.map((s) => ({ ...s, title: null })) } : d.activity;
+    const activity = d.activity && visibleActivity(d.activity, grants.get(d.userId) ?? SHARE_NOTHING, d.id);
     return {
       ...d.info,
       id: d.id,
@@ -311,4 +313,5 @@ export async function removeDevice(userId: string, id: string): Promise<void> {
     ],
     "write",
   );
+  await forgetDevice(userId, id);
 }

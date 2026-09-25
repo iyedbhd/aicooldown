@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { formatAgo } from "@/lib/format";
-import type { Role, RunStatus } from "@/lib/team";
+import type { Role, RunStatus, Sharing } from "@/lib/team";
+import { Icon } from "./Icon";
 
 /** Small pieces the team page shares. */
 
@@ -54,6 +55,43 @@ export function StatusChip({ status }: { status: RunStatus }) {
       {(status === "running" || status === "queued") && <span className="live h-1.5 w-1.5 rounded-full bg-current" aria-hidden />}
       {s.label}
     </span>
+  );
+}
+
+const SHARING: Record<Sharing, { label: string; title: string }> = {
+  managed: { label: "all work visible", title: "A member: the team's owner and admins see all of their work, what their sessions say included." },
+  all: { label: "shares all work", title: "Shows the team's other owners and admins all of their work." },
+  picked: { label: "shares what they pick", title: "Shows the team's other owners and admins only the projects and chats they share." },
+};
+
+/** How much of someone's work the team's owners and admins see. */
+export function SharingChip({ sharing }: { sharing: Sharing }) {
+  return (
+    <span className="chip" title={SHARING[sharing].title}>
+      <Icon name={sharing === "picked" ? "lock" : "eye"} size={11} />
+      {SHARING[sharing].label}
+    </span>
+  );
+}
+
+/**
+ * Whether the other owners and admins of your teams see this project or chat
+ * of yours; a click shares it or stops. `locked` says why it is shared anyway
+ * (everything is, or its project is) and keeps it as it is.
+ */
+export function ShareButton({ shared, locked, busy, onToggle }: { shared: boolean; locked: string | null; busy: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={busy || locked !== null}
+      aria-pressed={shared}
+      title={locked ?? (shared ? "The other owners and admins of your teams see it. Click to stop sharing it." : "Only you see it. Click to share it with the other owners and admins of your teams.")}
+      className={`chip shrink-0 transition hover:brightness-95 disabled:cursor-default ${shared ? "chip-good" : ""}`}
+    >
+      <Icon name={shared ? "eye" : "lock"} size={11} />
+      {busy ? "…" : shared ? "shared" : "not shared"}
+    </button>
   );
 }
 

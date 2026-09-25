@@ -1,6 +1,6 @@
 import { postJson, type ApiResult } from "./api";
 import type { Tool } from "./activity";
-import type { RemoteLevel, RunStatus, ShareLevel, ToolState } from "./team";
+import type { DeviceSharing, RemoteLevel, RunStatus, ShareLevel, ToolState } from "./team";
 import type { Provider } from "./types";
 
 /**
@@ -60,8 +60,10 @@ export type LocalDevice = {
   owner: { userId: string; email: string } | null;
   /** What remote sessions may do here. Only ever set on this computer. */
   remote: RemoteLevel;
-  /** Who may read what its sessions say (titles, and transcripts on request) on the website. Only ever set here. */
+  /** Whether what its sessions say (titles, and transcripts on request) reaches the website: its owner's choice, set here only. */
   share: ShareLevel;
+  /** Who else sees what of it, as the server said at the latest check-in; null before one. A member's teams see everything, whatever `share` says. */
+  sharing: DeviceSharing | null;
   lastSync: number | null;
   error: string | null;
   running: LocalRun | null;

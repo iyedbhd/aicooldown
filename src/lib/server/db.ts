@@ -133,6 +133,11 @@ CREATE TABLE IF NOT EXISTS session_transcripts (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (device_id, tool, session_id)
 );
+CREATE TABLE IF NOT EXISTS sharing (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  policy TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `;
 
 /**

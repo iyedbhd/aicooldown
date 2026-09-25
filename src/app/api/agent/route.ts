@@ -3,8 +3,8 @@ import { takeCommands } from "@/lib/server/commands";
 import { deviceFromRequest, parseActivity, parseReport, recordSync, unlinkDevice } from "@/lib/server/devices";
 import { purgeExpired } from "@/lib/server/retention";
 import { claimRun, interruptRuns } from "@/lib/server/runs";
+import { deviceSharing } from "@/lib/server/sharing";
 import { dropTranscripts, transcriptRequests } from "@/lib/server/transcripts";
-import { SHARE_LEVELS } from "@/lib/team";
 import { readBody } from "../_lib";
 import { failure } from "../_session";
 
@@ -21,11 +21,11 @@ const FAST_MS = 2_000;
 const notConnected = () => NextResponse.json({ error: "This computer is not connected." }, { status: 401 });
 
 /**
- * Checking in: `{ info, activity?, busy }`. Answers with the transcripts
- * someone is waiting for, when the computer shares session content, the
- * commands its owner sent, the next remote session to run (when it allows
- * them and runs none), and how soon to check in again (`pollMs`, when sooner
- * than it would).
+ * Checking in: `{ info, activity?, busy }`. Answers with who else sees what of
+ * the computer (`sharing`), the transcripts someone is waiting for, when it
+ * lets what sessions say reach the website, the commands its owner sent, the
+ * next remote session to run (when it allows them and runs none), and how
+ * soon to check in again (`pollMs`, when sooner than it would).
  */
 export async function POST(req: Request) {
   try {
@@ -36,15 +36,19 @@ export async function POST(req: Request) {
     const { info, manage } = parseReport(body.info);
     // A report that does not parse keeps the last good one.
     await recordSync(device, info, manage, (body.activity !== undefined && parseActivity(body.activity, info.share !== "off")) || undefined);
-    // It shares with fewer people than before: what it shared goes, and whoever may still read it asks again.
-    if (SHARE_LEVELS.indexOf(info.share) < SHARE_LEVELS.indexOf(device.info.share)) await dropTranscripts(device.id);
-    const [transcripts, commands] = await Promise.all([info.share !== "off" ? transcriptRequests(device.id) : [], takeCommands(device.id, device.userId)]);
+    // Turned private: what it sent goes.
+    if (info.share === "off" && device.info.share !== "off") await dropTranscripts(device.id);
+    const [sharing, transcripts, commands] = await Promise.all([
+      deviceSharing(device.userId, device.id),
+      info.share !== "off" ? transcriptRequests(device.id) : [],
+      takeCommands(device.id, device.userId),
+    ]);
     const busy = transcripts.length > 0 || commands.length > 0 || device.hotUntil > Date.now();
-    if (body.busy === true) return NextResponse.json({ run: null, transcripts, commands, pollMs: busy ? FAST_MS : undefined });
+    if (body.busy === true) return NextResponse.json({ sharing, run: null, transcripts, commands, pollMs: busy ? FAST_MS : undefined });
     // Running nothing: whatever is still marked running there was cut off.
     await interruptRuns(device.id);
-    const run = info.remote === "off" ? null : await claimRun(device.id, device.userId);
-    return NextResponse.json({ run, transcripts, commands, pollMs: busy || run ? FAST_MS : undefined });
+    const run = info.remote === "off" ? null : await claimRun(device);
+    return NextResponse.json({ sharing, run, transcripts, commands, pollMs: busy || run ? FAST_MS : undefined });
   } catch (err) {
     return failure(err);
   }

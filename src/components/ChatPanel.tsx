@@ -13,14 +13,16 @@ import {
   fetchTranscript,
   heatDevice,
   levelAllows,
+  manages,
   mayRunOn,
   MAX_PROMPT,
+  projectShared,
   REMOTE_HELP,
   REMOTE_LABEL,
   REMOTE_LEVELS,
   requestTranscript,
   RUN_FINISHED,
-  sharesWith,
+  sessionShared,
   startRun,
   TOOL_NAME,
   unavailable,
@@ -28,13 +30,14 @@ import {
   type RemoteLevel,
   type Run,
   type RunEvent,
+  type SharingChange,
   type Transcript,
   type Workspace,
 } from "@/lib/team";
 import { sourceLabel, type SessionRow } from "@/lib/team-stats";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
-import { StatusChip } from "./TeamBits";
+import { ShareButton, StatusChip } from "./TeamBits";
 
 /** What the chat opens on: one of the sessions the computers reported, a remote session, or a new conversation. */
 export type ChatTarget = { kind: "session"; key: string } | { kind: "run"; id: string } | { kind: "new"; deviceId?: string };
@@ -98,17 +101,20 @@ type Props = {
   onClose: () => void;
   /** Something changed that the workspace shows: a session started. */
   onChanged: () => void;
+  /** Shares or stops sharing some of your work with the other owners and admins of your teams. */
+  onShare: (change: SharingChange) => Promise<void>;
 };
 
 /**
  * A Claude Code or Codex conversation on one of the computers, as a chat: what
- * was said so far (read from the computer's log, where it shares that with the
- * viewer), what was sent from here and the replies as they come, and a box to
+ * was said so far (read from the computer's log, where it lets that reach the
+ * website), what was sent from here and the replies as they come, and a box to
  * say something next, which the computer runs as the next turn of the same
  * conversation. Works the same for conversations started in a terminal, an
- * IDE, the Claude or Codex desktop apps, or from here.
+ * IDE, the Claude or Codex desktop apps, or from here. An owner or admin
+ * shares their own conversations with their teams from here.
  */
-export function ChatPanel({ ws, sessions, now, target, onClose, onChanged }: Props) {
+export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onShare }: Props) {
   const devices = allDevices(ws);
   const usable = devices.filter((d) => mayRunOn(ws, d));
   const [thread, setThread] = useState<Thread | null>(() => threadOf(target, ws, sessions));
@@ -128,6 +134,7 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged }: Pro
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [details, setDetails] = useState(false);
+  const [sharingBusy, setSharingBusy] = useState(false);
   const seqs = useRef<Record<string, number>>({});
   const statuses = useRef<Record<string, string>>({});
   const scroller = useRef<HTMLDivElement>(null);
@@ -209,8 +216,8 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged }: Pro
     };
   }, [wanted]);
 
-  // What was said before: read from the computer's log where it shares that with the viewer, asked for the first time if nobody has.
-  const readable = Boolean(device && session && sharesWith(device.share, own));
+  // What was said before: read from the computer's log where it lets that reach the website, asked for the first time if nobody has.
+  const readable = Boolean(device && session && device.share !== "off");
   useEffect(() => {
     if (!readable || !sessionId) return;
     let alive = true;
@@ -253,6 +260,15 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged }: Pro
   const chosenModel = model ?? last?.model ?? sessionModel ?? "";
   const modes = REMOTE_LEVELS.filter((l) => device && levelAllows(device.remote, l));
   const projects = projectsOn(device);
+  // Your own conversation, in a team you run: whether its other owners and admins see it.
+  const sharing = session && own && ws.team && manages(ws.role) ? ws.sharing : null;
+  const shared = Boolean(sharing && session && sessionShared(sharing, session.key, session.project));
+  async function toggleShared() {
+    if (!session) return;
+    setSharingBusy(true);
+    await onShare({ session: session.key, shared: !shared });
+    setSharingBusy(false);
+  }
 
   async function send() {
     const text = prompt.trim();
@@ -324,6 +340,20 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged }: Pro
               )}
             </div>
             <div className="flex shrink-0 items-center gap-1">
+              {sharing && session && (
+                <ShareButton
+                  shared={shared}
+                  locked={
+                    sharing.all
+                      ? "You share everything. Pick \u201cWhat you pick\u201d under the team's name to share chats one by one."
+                      : projectShared(sharing, session.project)
+                        ? `Shared with its project, ${session.project}.`
+                        : null
+                  }
+                  busy={sharingBusy}
+                  onToggle={() => void toggleShared()}
+                />
+              )}
               {session && (
                 <button type="button" onClick={() => setDetails((d) => !d)} aria-expanded={details} className="rounded-lg px-2 py-1 text-[11px] text-muted hover:bg-panel-2 hover:text-fg">
                   details
@@ -341,10 +371,7 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged }: Pro
         <div ref={scroller} className="flex-1 space-y-2.5 overflow-y-auto px-4 py-4 sm:px-5" aria-live="polite">
           {sessionId && !readable && session && (
             <p className="text-[12px] text-faint">
-              {device?.share === "off" || !device
-                ? `What was said before stays on ${device?.name ?? "the computer"}: it does not share session content.`
-                : `${device.name} shares what its sessions say with its owner only.`}{" "}
-              Messages sent from here show below.
+              What was said before stays on {device?.name ?? "the computer"}: it keeps what its sessions say to itself. Messages sent from here show below.
             </p>
           )}
           {readable && !transcript && <p className="font-mono text-[11px] text-faint">asking {device?.name} for the conversation…</p>}

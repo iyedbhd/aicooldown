@@ -7,8 +7,9 @@ import type { Account, Provider, Usage } from "./types";
  * Teams: people, the computers they connected, every Claude Code and Codex
  * session on those computers, the limits of their linked accounts, and
  * sessions started on a computer from the dashboard. Owners and admins see all
- * of it for everyone in the team; members see the roster and their own.
- * Everyone has a personal workspace, "me", with just their own.
+ * of it for the team's members, and of each other what each shares (see
+ * SharePolicy); members see the roster and their own. Everyone has a personal
+ * workspace, "me", with just their own.
  */
 
 export type Role = "owner" | "admin" | "member";
@@ -35,30 +36,68 @@ export function levelAllows(level: RemoteLevel, mode: RemoteLevel): boolean {
 }
 
 /**
- * Who may read what a computer's sessions say (titles, and conversations on
- * request): nobody but the computer, its owner on the website, or the owners
- * and admins of the owner's teams too. Set on that computer only.
+ * Whether what a computer's sessions say (their titles, and conversations on
+ * request) leaves it: "off" keeps it there, "on" lets the website have it for
+ * whoever sees those sessions: the computer's owner, and the owners and admins
+ * of their teams as SharePolicy has it. Set on the computer, except that a
+ * member's is on: their teams' owners and admins see all of their work.
+ * Before 0.7 a computer said "me" or "team" (or, before 0.6, true) for on.
  */
-export type ShareLevel = "off" | "me" | "team";
+export type ShareLevel = "off" | "on";
 
-export const SHARE_LEVELS: ShareLevel[] = ["off", "me", "team"];
+export const SHARE_LEVELS: ShareLevel[] = ["off", "on"];
 
-export const SHARE_LABEL: Record<ShareLevel, string> = { off: "Private", me: "Only me", team: "Me and my teams" };
+export const SHARE_LABEL: Record<ShareLevel, string> = { off: "Private", on: "On the website" };
 
 export const SHARE_HELP: Record<ShareLevel, string> = {
-  off: "Sessions show on the Team page without titles, and their conversations stay on this computer.",
-  me: "You see session titles and can read and continue any conversation from the website. Your teams see sessions without titles.",
-  team: "You, and the owners and admins of your teams, see session titles and can read and continue any conversation from the website.",
+  off: "Sessions show on the Team page without titles, and their conversations stay on this computer: nobody reads them on the website, you included.",
+  on: "You see session titles and can read and continue any conversation from the website. Your teams' owners and admins see the projects and chats you share with them.",
 };
 
-/** Whether a computer at `level` shows what its sessions say to `viewer`: its owner, or anyone else. */
-export const sharesWith = (level: ShareLevel, owner: boolean) => level === "team" || (level === "me" && owner);
+/**
+ * What a team's owner or admin shows the other owners and admins of their
+ * teams: everything, or the projects (by folder name, on all their computers)
+ * and single chats they pick, and nothing until they pick. A member shows
+ * everything: their teams' owners and admins manage them.
+ */
+export type SharePolicy = { all: boolean; projects: string[]; sessions: string[] };
+
+export const SHARE_NOTHING: SharePolicy = { all: false, projects: [], sessions: [] };
+
+/** A session among all of them, as SharePolicy and the Sessions tab name it: its computer, CLI and id. */
+export const sessionKey = (deviceId: string, tool: Tool, id: string) => `${deviceId}:${tool}:${id}`;
+
+export const projectShared = (policy: SharePolicy, name: string) => policy.all || policy.projects.includes(name);
+
+/** A session is shared by itself, or with its project. */
+export const sessionShared = (policy: SharePolicy, key: string, project: string) => projectShared(policy, project) || policy.sessions.includes(key);
+
+/** A project's name, as the Projects tab and SharePolicy know it: its folder's. */
+export function projectName(activity: DeviceActivity | null, tool: Tool, path: string): string {
+  return activity?.projects.find((p) => p.tool === tool && p.path === path)?.name ?? path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+/** How much of someone's work their team's owners and admins see: all of it as a member's, all of it by choice, or what they pick. */
+export type Sharing = "managed" | "all" | "picked";
+
+/** What a computer hears at each check-in about who else sees what of it. */
+export type DeviceSharing = {
+  /** The teams its owner is a member of: their owners and admins see everything here, what sessions say included. */
+  managedBy: string[];
+  /** What its owner shows the other owners and admins of the teams they run: all of it, or these projects, and these sessions here ("tool:id"). */
+  all: boolean;
+  projects: string[];
+  sessions: string[];
+};
 
 /** Whether a CLI can run remote sessions on a computer: installed and signed in, installed but signed out, or not there. */
 export type ToolState = "ready" | "signed-out" | "missing";
 
 /** The AI Cooldown version a computer needs to continue its own sessions and take remote commands. */
 export const CHAT_VERSION = "0.6.0";
+
+/** The version that knows what its owner shares, so their teams' owners and admins may continue its own sessions. */
+export const SHARING_VERSION = "0.7.0";
 
 /** Whether version `v` (x.y.z) is `min` or later. */
 export function versionAtLeast(v: string, min: string): boolean {
@@ -91,7 +130,7 @@ export type DeviceInfo = {
   /** Whose account each CLI on the computer is signed in with, by email; null when signed out. */
   logins: Record<Provider, string | null>;
   remote: RemoteLevel;
-  /** Who may read what its sessions say: titles, and transcripts on request. Set on that computer only. */
+  /** Whether what its sessions say reaches the website: titles, and transcripts on request. */
   share: ShareLevel;
   /** Whether each CLI can run remote sessions there. */
   tools: Record<Tool, ToolState>;
@@ -142,6 +181,8 @@ export type Member = {
   joinedAt: number | null;
   /** Whether their computers, accounts and activity are included: your own, or everyone's for owners and admins. */
   detailed: boolean;
+  /** How much of their work the team's owners and admins see; null in the personal workspace. */
+  sharing: Sharing | null;
   devices: Device[];
   accounts: MemberAccount[];
 };
@@ -201,6 +242,8 @@ export type Workspace = {
   members: Member[];
   invites: Invite[];
   runs: Run[];
+  /** What you share with the other owners and admins of the teams you run. */
+  sharing: SharePolicy;
   /** The server's clock, to judge "seen 2 minutes ago" without trusting the browser's. */
   now: number;
 };
@@ -227,9 +270,9 @@ export function unavailable(device: Device, tool?: Tool): string | null {
 
 /**
  * Why the viewer cannot send a message into this conversation on this
- * computer, or null when they can: a conversation a remote session started
- * that they see, or any of the computer's sessions for its owner, and for
- * its owner's team admins when it shares session content with them.
+ * computer, or null when they can: a conversation a remote session started,
+ * or any of the computer's sessions the viewer sees, for its owner, and for
+ * its owner's team admins when it lets what sessions say reach the website.
  */
 export function chatBlocked(ws: Workspace, device: Device, tool: Tool, startedHere: boolean): string | null {
   if (!mayRunOn(ws, device)) return "Only its owner and the admins of their teams start sessions there.";
@@ -237,7 +280,9 @@ export function chatBlocked(ws: Workspace, device: Device, tool: Tool, startedHe
   if (why) return `${device.name}: ${why}.`;
   if (startedHere) return null;
   if (!versionAtLeast(device.version, CHAT_VERSION)) return `Update AI Cooldown on ${device.name} to ${CHAT_VERSION} or later to continue its own sessions from here.`;
-  if (device.userId !== ws.me.id && device.share !== "team") return `${device.name} does not share session content with its teams, so only its owner can continue its own sessions.`;
+  if (device.userId === ws.me.id) return null;
+  if (device.share === "off") return `${device.name} keeps what its sessions say to itself, so only its owner continues them from here.`;
+  if (!versionAtLeast(device.version, SHARING_VERSION)) return `Update AI Cooldown on ${device.name} to ${SHARING_VERSION} or later to continue its sessions from here.`;
   return null;
 }
 
@@ -254,6 +299,9 @@ export const revokeInvite = (teamId: string, inviteId: string) => requestJson(`/
 export const previewInvite = (token: string) => requestJson<InvitePreview>(`/api/invites/${encodeURIComponent(token)}`);
 export const acceptInvite = (token: string) => requestJson<{ teamId: string }>(`/api/invites/${encodeURIComponent(token)}`, { method: "POST", body: {} });
 export const removeDevice = (deviceId: string) => requestJson("/api/devices", { method: "DELETE", body: { deviceId } });
+/** Shares everything or what you pick, or shares or stops sharing a project (by name) or one session (by sessionKey). */
+export type SharingChange = { all: boolean } | { project: string; shared: boolean } | { session: string; shared: boolean };
+export const changeSharing = (change: SharingChange) => requestJson<{ sharing: SharePolicy }>("/api/sharing", { method: "POST", body: change });
 export const startRun = (run: NewRun) => requestJson<{ run: Run }>("/api/runs", { method: "POST", body: run });
 export const fetchRun = (id: string, after: number) => requestJson<{ run: Run; events: RunEvent[] }>(`/api/runs/${id}?after=${after}`);
 export const cancelRun = (id: string) => requestJson(`/api/runs/${id}`, { method: "DELETE", body: {} });

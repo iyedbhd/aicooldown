@@ -38,7 +38,7 @@ type Props = {
 };
 
 const REMOTE_TONE = { off: "", read: "chip-good", edit: "chip-warn", full: "chip-bad" } as const;
-const SHARE_CHIP = { off: "session content private", me: "session content: owner only", team: "session content shared with teams" } as const;
+const SHARE_CHIP = { off: "session content private", on: "session content on the website" } as const;
 const TOOL_TONE: Record<ToolState, string> = { ready: "text-emerald-600 dark:text-emerald-400", "signed-out": "text-amber-600 dark:text-amber-300", missing: "text-faint" };
 const TOOL_WORD: Record<ToolState, string> = { ready: "ready", "signed-out": "not signed in", missing: "not installed" };
 
@@ -153,8 +153,8 @@ function DeviceCard({ ws, sessions, device: d, ownerEmail, period, now, reload, 
             <Icon name="shield" size={11} />
             remote sessions: {REMOTE_LABEL[d.remote].toLowerCase()}
           </span>
-          <span className={`chip ${d.share === "team" ? "chip-warn" : ""}`} title={SHARE_HELP[d.share]}>
-            <Icon name={d.share === "off" ? "lock" : d.share === "me" ? "user" : "eye"} size={11} />
+          <span className="chip" title={SHARE_HELP[d.share]}>
+            <Icon name={d.share === "off" ? "lock" : "eye"} size={11} />
             {SHARE_CHIP[d.share]}
           </span>
           {!d.connected && <span className="chip chip-bad">disconnected: its owner signs in there again to reconnect</span>}

@@ -89,17 +89,34 @@ export function JoinTeam({ token }: { token: string }) {
                 <Icon name="shield" size={14} />
                 What the team&apos;s owner and admins see
               </p>
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-[13px] text-muted">
-                <li>the computers you connect, and which accounts their Claude Code and Codex CLIs use</li>
-                <li>every Claude Code and Codex session there: its project and branch, when and where it ran, its models and tokens</li>
-                <li>the projects you work on there, with token counts per day and model</li>
-                <li>the limits of the Claude and Codex accounts linked to your AI Cooldown account</li>
-                <li>remote Claude Code and Codex sessions on your computers, which they can start only where you allow it</li>
-              </ul>
-              <p className="mt-2 text-[12px] text-faint">
-                What your sessions say (their titles and conversations) only from a computer where you turn on sharing. Never your account credentials. Leave the
-                team any time.
-              </p>
+              {invite.role === "member" ? (
+                <>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-[13px] text-muted">
+                    <li>the computers you connect, and which accounts their Claude Code and Codex CLIs use</li>
+                    <li>every Claude Code and Codex session there: its project and branch, when and where it ran, its models and tokens</li>
+                    <li>what those sessions say: their titles and conversations, which they can also continue</li>
+                    <li>the projects you work on there, with token counts per day and model</li>
+                    <li>the limits of the Claude and Codex accounts linked to your AI Cooldown account</li>
+                    <li>remote Claude Code and Codex sessions on your computers, which they can start only where you allow it</li>
+                  </ul>
+                  <p className="mt-2 text-[12px] text-faint">
+                    As a member you show them all of your work: your computers let what your sessions say reach them while you are one. Never your account
+                    credentials. Leave the team any time.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-[13px] text-muted">
+                    <li>the computers you connect, and which accounts their Claude Code and Codex CLIs use</li>
+                    <li>the limits of the Claude and Codex accounts linked to your AI Cooldown account</li>
+                    <li>of your projects and sessions, only the ones you share with them: you pick them on the Team page, or share everything</li>
+                  </ul>
+                  <p className="mt-2 text-[12px] text-faint">
+                    As an {invite.role} you see all of the members&apos; work, and they see what you choose to share. Never your account credentials. Leave the team any
+                    time.
+                  </p>
+                </>
+              )}
             </div>
 
             {error && <p className="mt-4 border-l-2 border-rose-500/70 pl-2 text-xs text-rose-600 dark:text-rose-400">{error}</p>}

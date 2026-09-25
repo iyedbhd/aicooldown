@@ -7,7 +7,7 @@ import { createInvite, manages, removeMember, revokeInvite, setRole, type Invite
 import { fullestWindow, lastActive, projectsOf, rollupProjects, totalsSince, type Period, type SessionRow } from "@/lib/team-stats";
 import { Icon } from "./Icon";
 import { PROVIDER_META, ProviderGlyph } from "./ProviderLogo";
-import { Avatar, Card, Empty, OnlineDot, RoleBadge } from "./TeamBits";
+import { Avatar, Card, Empty, OnlineDot, RoleBadge, SharingChip } from "./TeamBits";
 import { SessionLine, type SessionFilter } from "./TeamSessions";
 
 type Props = {
@@ -64,6 +64,7 @@ export function TeamPeople({ ws, sessions, period, now, reload, flash, onOpenSes
                         <span className="truncate text-sm font-medium text-fg">{m.email}</span>
                         {m.role && <RoleBadge role={m.role} />}
                         {m.id === ws.me.id && <span className="text-[11px] text-faint">you</span>}
+                        {m.sharing && m.id !== ws.me.id && <SharingChip sharing={m.sharing} />}
                         {live > 0 && (
                           <span className="chip chip-good">
                             <span className="live h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
@@ -136,7 +137,13 @@ function MemberDetail({ ws, member, sessions, since, now, reload, flash, onOpenS
 
   function changeRole(role: Role) {
     if (!ws.team) return;
-    if (role === "owner" && !window.confirm(`Make ${member.email} the owner of ${ws.team.name}? You become an admin.`)) return;
+    const question =
+      role === "owner"
+        ? `Make ${member.email} the owner of ${ws.team.name}? You become an admin, and show the team's other owners and admins only what you share with them.`
+        : role === "admin"
+          ? `Make ${member.email} an admin of ${ws.team.name}? They then see all the members' work, and choose which of their own projects and chats the team's owners and admins see: until they share some, none.`
+          : `Make ${member.email} a member of ${ws.team.name}? The team's owner and admins then see all of their work, what their sessions say included.`;
+    if (!window.confirm(question)) return;
     void act(() => setRole(ws.team!.id, member.id, role), role === "owner" ? `${member.email} owns the team now.` : `${member.email} is now ${role === "admin" ? "an admin" : "a member"}.`);
   }
 
@@ -351,9 +358,10 @@ function InviteCard({ ws, now, reload, flash }: { ws: Workspace; now: number; re
           </div>
         )}
         <p className="text-[11px] text-faint">
-          Joining lets the owner and admins see that person&apos;s connected computers, every Claude Code and Codex session there (when, where, which models,
-          how many tokens), their projects and account limits, and start sessions on their computers where they allow it. Session titles and conversations
-          only from computers set to share them; never account credentials.
+          A member shows the owner and admins all their work: their connected computers, every Claude Code and Codex session there with its title and
+          conversation (when, where, which models, how many tokens), their projects and account limits, and the owner and admins start and continue sessions on
+          their computers where they allow it. An admin shows the owner and other admins their computers and limits, and only the projects and chats they share.
+          Never account credentials.
         </p>
       </div>
       {ws.invites.length > 0 && (

@@ -59,7 +59,7 @@ export function TeamSessions({ ws, sessions, now, filter, onFilter, onNewChat, o
   const devices = ws.members.flatMap((m) => m.devices);
   const projects = [...new Set(sessions.map((s) => s.project))].sort((a, b) => a.localeCompare(b));
   const filtering = JSON.stringify(filter) !== JSON.stringify(NO_FILTER);
-  const privateComputers = devices.filter((d) => d.share === "off" || (d.share === "me" && d.userId !== ws.me.id)).length;
+  const privateComputers = devices.filter((d) => d.share === "off").length;
   const team = Boolean(ws.team);
 
   return (

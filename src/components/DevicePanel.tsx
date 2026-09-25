@@ -22,9 +22,10 @@ type Props = {
 
 /**
  * This computer in the signed-in account: connecting it (so it shows on the
- * Team page with its sessions and what it works on), whether it shares what
- * its sessions say, and what remote sessions may do here. Only this computer
- * decides those two.
+ * Team page with its sessions and what it works on), whether what its
+ * sessions say reaches the website, and what remote sessions may do here.
+ * This computer decides those two, except that a team member's lets what
+ * sessions say through: their teams' owners and admins see all of their work.
  */
 export function DevicePanel({ device, tools, user, now, busy, run }: Props) {
   const reconnecting = useRef(false);
@@ -40,27 +41,21 @@ export function DevicePanel({ device, tools, user, now, busy, run }: Props) {
 
   function setShare(level: ShareLevel) {
     if (level === device.share) return;
-    const what =
-      "each session's title (or its first prompt) on the Team page, and can have any session's conversation sent there, and continue it: prompts, replies, " +
-      "the commands run and what they printed, which can include code, file contents and anything else a session saw. A conversation is sent only when " +
-      "asked for, and kept there a week.";
     const question =
-      level === "team"
-        ? `Share what the Claude Code and Codex sessions on this computer say with your teams?\n\nYou, and the owners and admins of your teams, then see ${what}`
-        : level === "me" && device.share === "off"
-          ? `Let yourself read what the sessions on this computer say from the website?\n\nSigned in as you, you then see ${what} Nobody else does.`
-          : null;
+      level === "on"
+        ? "Let what the Claude Code and Codex sessions on this computer say reach the website?\n\nSigned in as you, you then see each session's title (or its first " +
+          "prompt) on the Team page, and can have any session's conversation sent there, and continue it: prompts, replies, the commands run and what they " +
+          "printed, which can include code, file contents and anything else a session saw. A conversation is sent only when asked for, and kept there a week. " +
+          "The owners and admins of the teams you run see it only for the projects and chats you share with them on the Team page."
+        : null;
     if (question && !window.confirm(question)) return;
     void run(
       `share-${level}`,
       { action: "share", level },
-      level === "off"
-        ? "Session content stays on this computer again; what it sent is deleted from the Team page."
-        : level === "me"
-          ? "Only you see what this computer's sessions say on the website now."
-          : "This computer shares session content with your teams now.",
+      level === "off" ? "What sessions say stays on this computer again; what it sent is deleted from the Team page." : "What this computer's sessions say reaches the website now.",
     );
   }
+  const managedBy = device.sharing?.managedBy ?? [];
 
   function setLevel(level: RemoteLevel) {
     if (level === device.remote) return;
@@ -111,28 +106,41 @@ export function DevicePanel({ device, tools, user, now, busy, run }: Props) {
         {device.error && <p className="text-xs text-amber-700 dark:text-amber-300">{device.error}</p>}
         <p className="text-[11px] text-faint">
           While connected it reports its name and system, the accounts its CLIs are signed in with, and each Claude Code and Codex session in the CLIs&apos; logs:
-          its project folder and git branch, where it ran, its models, times and token counts. What the sessions say only if you share it below.
+          its project folder and git branch, where it ran, its models, times and token counts. What the sessions say only if you let it below.
         </p>
 
         <div>
           <p className="eyebrow">session content</p>
-          <div role="radiogroup" aria-label="Who may read what sessions say" className="mt-1.5 inline-flex flex-wrap gap-0.5 rounded-lg border border-line bg-panel-2 p-0.5">
-            {SHARE_LEVELS.map((level) => (
-              <button
-                key={level}
-                type="button"
-                role="radio"
-                aria-checked={device.share === level}
-                disabled={disabled}
-                onClick={() => setShare(level)}
-                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition ${device.share === level ? (level === "team" ? "bg-amber-500/15 text-amber-700 dark:text-amber-300" : "bg-panel-3 text-fg") : "text-muted hover:text-fg-2"}`}
-              >
-                <Icon name={level === "off" ? "lock" : level === "me" ? "user" : "eye"} size={11} />
-                {SHARE_LABEL[level]}
-              </button>
-            ))}
-          </div>
-          <p className="mt-1.5 text-[11px] text-faint">{SHARE_HELP[device.share]} Continuing a conversation from the website also needs remote sessions allowed below.</p>
+          {managedBy.length > 0 ? (
+            <p className="mt-1.5 flex items-start gap-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+              <Icon name="eye" size={12} className="mt-px shrink-0" />
+              <span>
+                You are a member of {managedBy.join(", ")}: {managedBy.length === 1 ? "its" : "their"} owner and admins see all your work here, what your sessions say
+                included, and can continue those sessions where remote sessions are allowed below. That goes with being a member; leaving the team, or becoming one
+                of its admins, gives you the choice again.
+              </span>
+            </p>
+          ) : (
+            <>
+              <div role="radiogroup" aria-label="Whether what sessions say reaches the website" className="mt-1.5 inline-flex flex-wrap gap-0.5 rounded-lg border border-line bg-panel-2 p-0.5">
+                {SHARE_LEVELS.map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    role="radio"
+                    aria-checked={device.share === level}
+                    disabled={disabled}
+                    onClick={() => setShare(level)}
+                    className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition ${device.share === level ? "bg-panel-3 text-fg" : "text-muted hover:text-fg-2"}`}
+                  >
+                    <Icon name={level === "off" ? "lock" : "eye"} size={11} />
+                    {SHARE_LABEL[level]}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[11px] text-faint">{SHARE_HELP[device.share]} Continuing a conversation from the website also needs remote sessions allowed below.</p>
+            </>
+          )}
         </div>
 
         <div>

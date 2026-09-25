@@ -1,22 +1,42 @@
 import type { InStatement } from "@libsql/client";
 import type { Tool } from "../activity";
-import { CHAT_VERSION, levelAllows, MAX_PROMPT, MODEL_NAME, REMOTE_LABEL, SESSION_ID, TOOL_NAME, versionAtLeast, type RemoteLevel, type Run, type RunEvent, type RunEventKind, type RunJob, type RunResult, type RunStatus } from "../team";
+import {
+  CHAT_VERSION,
+  levelAllows,
+  MAX_PROMPT,
+  MODEL_NAME,
+  REMOTE_LABEL,
+  SESSION_ID,
+  SHARING_VERSION,
+  TOOL_NAME,
+  versionAtLeast,
+  type RemoteLevel,
+  type Run,
+  type RunEvent,
+  type RunEventKind,
+  type RunJob,
+  type RunResult,
+  type RunStatus,
+} from "../team";
 import type { User } from "./auth";
 import { decrypt, encrypt, newId, openJson, sealJson } from "./crypto";
 import { db, ensureSchema, placeholders } from "./db";
-import { deviceById, heatDevice, isOnline } from "./devices";
+import { deviceById, heatDevice, isOnline, type DeviceRecord } from "./devices";
 import { RequestError } from "./request-error";
-import { adminOver, seesRun } from "./teams";
+import { accessTo, showsWork } from "./sharing";
+import { seesRun } from "./teams";
 
 /*
  * Remote sessions: a prompt for Claude Code or Codex, queued here for one
  * computer, which picks it up when it next checks in, runs it in the project
  * and sends the output back as it comes. Who may start one: the computer's
- * owner, and the owners and admins of their teams. Who sees it: the
- * computer's owner, and the owners and admins of a team that both the owner
- * and whoever started it are in. What it may do: whatever the computer
- * allows, which it enforces itself too. Prompts, output and results are
- * encrypted at rest like provider tokens.
+ * owner, and the owners and admins of their teams, in what they see of the
+ * owner's work (all of a member's, what an owner or admin shares; see
+ * sharing.ts). Who sees it: the computer's owner, and the owners and admins
+ * of a team that both the owner and whoever started it are in, while they see
+ * what it worked on. What it may do: whatever the computer allows, which it
+ * enforces itself too. Prompts, output and results are encrypted at rest like
+ * provider tokens.
  */
 
 /** A session no computer picked up in this long fails: nobody expects it to start hours later. */
@@ -100,9 +120,19 @@ export async function listRuns(deviceIds: string[], viewerId: string, teamId: st
   return res.rows.map((r) => toRun(r as Row));
 }
 
-const sees = (viewer: User, row: Row) => seesRun(viewer.id, String(row.device_user), row.created_by === null ? null : String(row.created_by));
+/** Whether the viewer sees this run: see seesRun, and it must be in a project or chat they see of the computer owner's work. */
+async function sees(viewer: User, row: Row): Promise<boolean> {
+  const owner = String(row.device_user);
+  if (viewer.id === owner) return true;
+  if (!(await seesRun(viewer.id, owner, row.created_by === null ? null : String(row.created_by)))) return false;
+  const grant = await accessTo(viewer.id, owner);
+  if (!grant) return false;
+  const device = grant.all ? null : await deviceById(String(row.device_id));
+  const text = (v: unknown) => (v === null || v === undefined ? null : String(v));
+  return showsWork(grant, device ?? { id: String(row.device_id), activity: null }, String(row.tool) as Tool, String(row.project), [text(row.session_id), text(row.resume_session)]);
+}
 
-/** The run, if the viewer may see it (see seesRun). */
+/** The run, if the viewer may see it (see sees). */
 async function visibleRun(viewer: User, id: string): Promise<Row> {
   await ensureSchema();
   const res = await db().execute({ sql: `${SELECT} WHERE r.id = ?`, args: [id] });
@@ -113,7 +143,8 @@ async function visibleRun(viewer: User, id: string): Promise<Row> {
 
 export async function createRun(viewer: User, raw: Record<string, unknown>): Promise<Run> {
   const device = typeof raw.deviceId === "string" ? await deviceById(raw.deviceId) : null;
-  if (!device || !(await adminOver(viewer.id, device.userId))) throw new RequestError(404, "Computer not found.");
+  const grant = device && (await accessTo(viewer.id, device.userId));
+  if (!device || !grant) throw new RequestError(404, "Computer not found.");
   const name = device.info.name;
   const prompt = typeof raw.prompt === "string" ? raw.prompt.trim() : "";
   if (!prompt) throw new RequestError(400, "Write what Claude should do.");
@@ -125,29 +156,34 @@ export async function createRun(viewer: User, raw: Record<string, unknown>): Pro
   const model = typeof raw.model === "string" && raw.model ? raw.model : null;
   if (model !== null && !MODEL_NAME.test(model)) throw new RequestError(400, "Unknown model.");
   const project = typeof raw.project === "string" ? raw.project : "";
-  if (!device.activity?.projects.some((p) => p.path === project)) throw new RequestError(400, `Pick one of the projects ${name} reported.`);
+  const resumeId = raw.resume ? (typeof raw.resume === "string" && SESSION_ID.test(raw.resume) ? raw.resume : null) : null;
+  // A project the viewer sees of the owner's work, or the one of a chat they see: unshared ones are as unknown as missing ones.
+  if (!device.activity?.projects.some((p) => p.path === project) || !showsWork(grant, device, tool, project, [resumeId])) throw new RequestError(400, `Pick one of the projects ${name} reported.`);
   let resume: string | null = null;
   if (raw.resume) {
-    const id = typeof raw.resume === "string" && SESSION_ID.test(raw.resume) ? raw.resume : null;
     // A conversation a remote session started (not one it only continued), which the viewer sees: one started from
     // another team stays that team's, and one of the computer's own stays under the rule below however it was continued.
     const found =
-      id &&
+      resumeId &&
       (await db().execute({
         sql: `${SELECT} WHERE r.device_id = ? AND r.project = ? AND r.tool = ? AND r.session_id = ? AND r.resume_session IS NULL ORDER BY r.created_at LIMIT 1`,
-        args: [device.id, project, tool, id],
+        args: [device.id, project, tool, resumeId],
       }));
     const started = found ? (found.rows[0] as Row | undefined) : undefined;
     const fromHere = Boolean(started && (await sees(viewer, started)));
-    // Or any of the computer's own conversations (in its CLI, the desktop apps, an IDE): for its owner, and for the
-    // admins of the owner's teams when it shares session content with them, since the reply can tell what was said before.
-    const reported = Boolean(id && device.activity?.sessions.some((s) => s.id === id && s.tool === tool && s.path === project));
-    const mayContinue = viewer.id === device.userId || device.info.share === "team";
+    // Or any of the computer's own conversations (in its CLI, the desktop apps, an IDE) that the viewer sees: for its
+    // owner, and for the admins of the owner's teams when what sessions say reaches the website, since the reply can
+    // tell what was said before.
+    const reported = Boolean(resumeId && device.activity?.sessions.some((s) => s.id === resumeId && s.tool === tool && s.path === project));
     if (!fromHere) {
-      if (!reported || !mayContinue) throw new RequestError(400, "Only a session started from here can be continued, or the computer owner's own sessions.");
+      if (!reported) throw new RequestError(400, "Only a session started from here can be continued, or one of the computer's own sessions.");
       if (!versionAtLeast(device.info.version, CHAT_VERSION)) throw new RequestError(409, `Update AI Cooldown on ${name} to ${CHAT_VERSION} or later to continue its own sessions from here.`);
+      if (viewer.id !== device.userId) {
+        if (device.info.share === "off") throw new RequestError(403, `${name} keeps what its sessions say to itself, so only its owner continues them from here.`);
+        if (!versionAtLeast(device.info.version, SHARING_VERSION)) throw new RequestError(409, `Update AI Cooldown on ${name} to ${SHARING_VERSION} or later to continue its sessions from here.`);
+      }
     }
-    resume = id;
+    resume = resumeId;
   }
   if (!isOnline(device)) throw new RequestError(409, `${name} is offline. A session starts on a computer that is on, with AI Cooldown running.`);
   const cli = device.info.tools[tool];
@@ -213,21 +249,24 @@ export async function cancelRun(viewer: User, id: string): Promise<void> {
 
 /**
  * The oldest queued run for this computer, now marked running, or null. Whoever
- * queued it must still be allowed to: they may have left the team meanwhile.
+ * queued it must still be allowed to: they may have left the team meanwhile,
+ * or its owner stopped sharing what it works on.
  */
-export async function claimRun(deviceId: string, ownerId: string): Promise<RunJob | null> {
-  await settleStale([deviceId]);
+export async function claimRun(device: DeviceRecord): Promise<RunJob | null> {
+  await settleStale([device.id]);
   for (;;) {
     const res = await db().execute({
       sql: `UPDATE runs SET status = 'running', started_at = ?
         WHERE id = (SELECT id FROM runs WHERE device_id = ? AND status = 'queued' ORDER BY created_at LIMIT 1)
         RETURNING id, tool, project, prompt, mode, model, resume_session, created_by`,
-      args: [Date.now(), deviceId],
+      args: [Date.now(), device.id],
     });
     const r = res.rows[0] as Row | undefined;
     if (!r) return null;
-    if (!(await adminOver(String(r.created_by), ownerId))) {
-      await db().execute({ sql: "UPDATE runs SET status = 'failed', finished_at = ?, result = ? WHERE id = ?", args: [Date.now(), failed("Whoever started it may no longer start sessions on this computer."), String(r.id)] });
+    const grant = await accessTo(String(r.created_by), device.userId);
+    const resume = r.resume_session === null ? null : String(r.resume_session);
+    if (!grant || !showsWork(grant, device, String(r.tool) as Tool, String(r.project), [resume])) {
+      await db().execute({ sql: "UPDATE runs SET status = 'failed', finished_at = ?, result = ? WHERE id = ?", args: [Date.now(), failed("Whoever started it may no longer start sessions there."), String(r.id)] });
       continue;
     }
     const by = await db().execute({ sql: "SELECT email FROM users WHERE id = ?", args: [String(r.created_by)] });

@@ -1,19 +1,19 @@
 import type { Tool } from "../activity";
-import { SESSION_ID, sharesWith, type RunEventKind, type Transcript } from "../team";
+import { SESSION_ID, type RunEventKind, type Transcript } from "../team";
 import type { User } from "./auth";
 import { decrypt, encrypt } from "./crypto";
 import { db, ensureSchema } from "./db";
 import { deviceById, heatDevice, type DeviceRecord } from "./devices";
 import { RequestError } from "./request-error";
-import { adminOver } from "./teams";
+import { accessTo, showsSession } from "./sharing";
 
 /*
  * Session transcripts: the conversation of a Claude Code or Codex session,
- * which its computer reads from the CLI's log and sends when someone who may
- * see that computer asks, and only while the computer shares session content.
- * The computer is asked on its next check-in. A transcript is kept here,
- * encrypted like provider tokens, for a week (retention.ts), and dropped as
- * soon as its computer stops sharing.
+ * which its computer reads from the CLI's log and sends when someone who sees
+ * that session asks (see sharing.ts), and only while the computer lets what
+ * sessions say reach the website. The computer is asked on its next check-in.
+ * A transcript is kept here, encrypted like provider tokens, for a week
+ * (retention.ts), and dropped as soon as its computer turns that off.
  */
 
 /** A request its computer has not answered in this long fails. */
@@ -37,10 +37,12 @@ function keyOf(raw: Record<string, unknown>): Key {
   return { deviceId, tool, sessionId };
 }
 
-/** The computer, if the viewer may see it: their own, or one of someone in a team they manage. */
-async function visibleDevice(viewer: User, deviceId: string): Promise<DeviceRecord> {
-  const device = await deviceById(deviceId);
-  if (!device || !(await adminOver(viewer.id, device.userId))) throw new RequestError(404, "Computer not found.");
+/** The session's computer, if the viewer sees the session: on their own computer, a member's of a team they run, or shared with them. */
+async function visibleDevice(viewer: User, k: Key): Promise<DeviceRecord> {
+  const device = await deviceById(k.deviceId);
+  const grant = device && (await accessTo(viewer.id, device.userId));
+  if (!device || !grant) throw new RequestError(404, "Computer not found.");
+  if (!showsSession(grant, device, k.tool, k.sessionId)) throw new RequestError(404, "That session is not among the ones you see on this computer.");
   return device;
 }
 
@@ -64,14 +66,9 @@ const find = (k: Key) => db().execute({ sql: "SELECT * FROM session_transcripts 
 export async function requestTranscript(viewer: User, raw: Record<string, unknown>): Promise<Transcript> {
   const k = keyOf(raw);
   await ensureSchema();
-  const device = await visibleDevice(viewer, k.deviceId);
-  if (!sharesWith(device.info.share, viewer.id === device.userId)) {
-    throw new RequestError(
-      403,
-      device.info.share === "me"
-        ? `${device.info.name} shares session content with its owner only.`
-        : `${device.info.name} does not share session content. Its owner can turn that on in AI Cooldown there, under This machine.`,
-    );
+  const device = await visibleDevice(viewer, k);
+  if (device.info.share === "off") {
+    throw new RequestError(403, `${device.info.name} keeps what its sessions say on the computer. Its owner can change that in AI Cooldown there, under This machine.`);
   }
   if (!device.activity?.sessions.some((s) => s.tool === k.tool && s.id === k.sessionId)) throw new RequestError(404, "That session is not among the ones this computer reported.");
   const now = Date.now();
@@ -101,9 +98,9 @@ export async function requestTranscript(viewer: User, raw: Record<string, unknow
 export async function getTranscript(viewer: User, raw: Record<string, unknown>): Promise<Transcript | null> {
   const k = keyOf(raw);
   await ensureSchema();
-  const device = await visibleDevice(viewer, k.deviceId);
-  // Stopped sharing (with the viewer): what it sent is being dropped, and is not shown meanwhile.
-  if (!sharesWith(device.info.share, viewer.id === device.userId)) return null;
+  const device = await visibleDevice(viewer, k);
+  // Turned private: what it sent is being dropped, and is not shown meanwhile.
+  if (device.info.share === "off") return null;
   const now = Date.now();
   await db().execute({
     sql: "UPDATE session_transcripts SET status = 'failed', error = ?, updated_at = ? WHERE device_id = ? AND status = 'pending' AND requested_at < ?",

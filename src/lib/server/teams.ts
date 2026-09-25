@@ -8,9 +8,11 @@ import { RequestError } from "./request-error";
 /*
  * Teams. The owner runs the team: renames or deletes it, changes roles, and
  * hands it to someone else. Admins invite people and remove members. Owners
- * and admins see every member's computers, projects, token usage, account
- * limits and remote sessions, and may start sessions on their computers when
- * those allow it. Members see the roster and their own details.
+ * and admins see all of every member's work (computers, projects, sessions and
+ * what they say, token usage, account limits, remote sessions), of each other
+ * the computers, limits and what each shares (sharing.ts), and may start
+ * sessions on the computers they see when those allow it. Members see the
+ * roster and their own details.
  */
 
 const INVITE_TTL_MS = 7 * 86400_000;

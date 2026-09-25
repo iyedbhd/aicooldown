@@ -12,13 +12,14 @@ import {
   levelAllows,
   MAX_PROMPT,
   MODEL_NAME,
+  projectName,
   REMOTE_LABEL,
   REMOTE_LEVELS,
   SESSION_ID,
-  SHARE_LEVELS,
   type CommandKind,
   type DeviceInfo,
   type DeviceManage,
+  type DeviceSharing,
   type RemoteLevel,
   type RunJob,
   type RunStatus,
@@ -38,13 +39,15 @@ import { readTranscript, type TranscriptEvent } from "./transcript";
  * (aicooldown.com for the desktop app, or this copy itself): what it is, which
  * accounts its CLIs are signed in with and whether they can run, every Claude
  * Code and Codex session it ran, and for its owner the logins it keeps and the
- * hellos it has scheduled. Two settings are this computer's alone, and it
- * holds the server to them rather than taking it at its word: what remote
- * sessions may do (it runs the ones it is sent, one at a time), and who may
- * read what sessions say (titles, and transcripts on request). Its owner can
- * also have it switch or save a CLI login and say hello from the website.
- * data/device.json keeps its token, those settings, and a note of the remote
- * sessions it ran.
+ * hellos it has scheduled. Two settings are this computer's, and it holds the
+ * server to them rather than taking it at its word: what remote sessions may
+ * do (it runs the ones it is sent, one at a time), and whether what sessions
+ * say (titles, and transcripts on request) reaches the website, which a team
+ * member's computer always lets it: their teams' owners and admins see all of
+ * their work. The server says at each check-in what else its owner shares,
+ * and it runs sessions for others only in that. Its owner can also have it
+ * switch or save a CLI login and say hello from the website. data/device.json
+ * keeps its token, those settings, and a note of the remote sessions it ran.
  */
 
 const FILE = path.join(DATA_DIR, "device.json");
@@ -58,7 +61,17 @@ const TIMEOUT_MS = 20_000;
 const KEEP_RUNS = 20;
 
 type Link = { server: string; deviceId: string; token: string; userId: string; email: string };
-type Stored = { machineId: string; remote: RemoteLevel; share: ShareLevel; owner: LocalDevice["owner"]; link: Link | null; runs: LocalRun[] };
+type Stored = {
+  machineId: string;
+  remote: RemoteLevel;
+  /** Its owner's choice; what it does is effectiveShare's. */
+  share: ShareLevel;
+  /** What the server said at the latest check-in about who else sees what of it. */
+  sharing: DeviceSharing | null;
+  owner: LocalDevice["owner"];
+  link: Link | null;
+  runs: LocalRun[];
+};
 type TranscriptAsk = { tool: Tool; sessionId: string };
 type CommandJob = { id: string; kind: CommandKind; args: Record<string, unknown>; by: string | null };
 type Clis = { logins: DeviceInfo["logins"]; tools: Record<Tool, ToolState>; manage: DeviceManage };
@@ -107,8 +120,18 @@ const reason = (err: unknown) => {
   return cause ?? (err instanceof Error ? err.message : String(err));
 };
 
-/** Before 0.6 sharing was yes or no, and yes meant with the owner's teams. */
-const shareOf = (v: unknown): ShareLevel => (v === true ? "team" : SHARE_LEVELS.includes(v as ShareLevel) ? (v as ShareLevel) : "off");
+/** Before 0.7 on was "me" or "team", and before 0.6 true. */
+const shareOf = (v: unknown): ShareLevel => (v === "on" || v === "me" || v === "team" || v === true ? "on" : "off");
+
+function sharingOf(raw: unknown): DeviceSharing | null {
+  if (!raw || typeof raw !== "object") return null;
+  const v = raw as Record<string, unknown>;
+  const list = (x: unknown, max: number) => (Array.isArray(x) ? x.filter((s): s is string => typeof s === "string" && s.length <= 200).slice(0, max) : []);
+  return { managedBy: list(v.managedBy, 50), all: v.all === true, projects: list(v.projects, 500), sessions: list(v.sessions, 2_000) };
+}
+
+/** A team member's computer lets what sessions say reach the website, whatever its owner chose: their teams' owners and admins see all of their work. */
+const effectiveShare = (s: Stored): ShareLevel => (s.sharing?.managedBy.length ? "on" : s.share);
 
 async function load(): Promise<Stored> {
   try {
@@ -118,6 +141,7 @@ async function load(): Promise<Stored> {
         machineId: s.machineId,
         remote: REMOTE_LEVELS.includes(s.remote as RemoteLevel) ? (s.remote as RemoteLevel) : "off",
         share: shareOf(s.share),
+        sharing: sharingOf(s.sharing),
         owner: s.owner ?? null,
         link: s.link ?? null,
         // Runs noted before Codex could run here were Claude Code's.
@@ -127,7 +151,7 @@ async function load(): Promise<Stored> {
   } catch {
     /* not connected yet */
   }
-  return { machineId: randomUUID(), remote: "off", share: "off", owner: null, link: null, runs: [] };
+  return { machineId: randomUUID(), remote: "off", share: "off", sharing: null, owner: null, link: null, runs: [] };
 }
 
 /** One change at a time, written whole and readable by this user only: it holds the computer's token. */
@@ -182,13 +206,13 @@ async function deviceInfo(stored: Stored): Promise<DeviceInfo & { manage: Device
     version: pkg.version,
     logins,
     remote: stored.remote,
-    share: stored.share,
+    share: effectiveShare(stored),
     tools,
     manage,
   };
 }
 
-/** The activity report as it leaves this computer: without session titles unless it shares session content. */
+/** The activity report as it leaves this computer: without session titles unless what sessions say reaches the website. */
 function report(activity: DeviceActivity, share: ShareLevel): DeviceActivity {
   return share !== "off" ? activity : { ...activity, sessions: activity.sessions.map((s) => ({ ...s, title: null })) };
 }
@@ -228,7 +252,7 @@ async function tick(): Promise<void> {
   }
   const s = await load();
   if (!s.link) return; // idle until it is connected again
-  const usual = s.remote !== "off" || s.share !== "off" ? SYNC_MS.quick : SYNC_MS.slow;
+  const usual = s.remote !== "off" || effectiveShare(s) !== "off" ? SYNC_MS.quick : SYNC_MS.slow;
   // Sooner when the server asks (someone works with this computer), never busier than every 1.5 seconds.
   schedule(runtime.again ? 0 : runtime.pollMs ? Math.max(1_500, Math.min(runtime.pollMs, usual)) : usual);
   runtime.again = false;
@@ -247,7 +271,7 @@ async function sync(): Promise<void> {
   const link = stored.link;
   if (!link) return;
   if (!runtime.scan || Date.now() - runtime.scan.at > SCAN_MS) await rescan();
-  const activity = runtime.scan ? report(runtime.scan.activity, stored.share) : null;
+  const activity = runtime.scan ? report(runtime.scan.activity, effectiveShare(stored)) : null;
   const outgoing = activity && JSON.stringify(activity);
   const sending = outgoing !== null && outgoing !== runtime.reported;
   const res = await agentFetch(link, "/api/agent", "POST", { info: await deviceInfo(stored), activity: sending ? activity : undefined, busy: runtime.running !== null });
@@ -259,12 +283,22 @@ async function sync(): Promise<void> {
     runtime.error = "The account disconnected this computer. It connects again when you sign in here.";
     return;
   }
-  const json = (await res.json().catch(() => ({}))) as { run?: RunJob | null; transcripts?: TranscriptAsk[]; commands?: CommandJob[]; pollMs?: number; error?: string };
+  const json = (await res.json().catch(() => ({}))) as { sharing?: unknown; run?: RunJob | null; transcripts?: TranscriptAsk[]; commands?: CommandJob[]; pollMs?: number; error?: string };
   if (!res.ok) throw new Error(json.error ?? `${new URL(link.server).host} answered ${res.status}`);
   runtime.lastSync = Date.now();
   runtime.error = null;
   runtime.pollMs = typeof json.pollMs === "number" && Number.isFinite(json.pollMs) ? json.pollMs : undefined;
   if (sending) runtime.reported = outgoing;
+  // Who else sees what, before anything they asked for: a server from before 0.7 says nothing, which shares nothing more.
+  const sharing = sharingOf(json.sharing);
+  if (JSON.stringify(sharing) !== JSON.stringify(stored.sharing)) {
+    const was = effectiveShare(stored);
+    const now = await update((s) => {
+      s.sharing = sharing;
+    });
+    if (effectiveShare(now) !== was) soon(); // the next report says so, and carries titles or not
+  }
+  const share = sharing?.managedBy.length ? "on" : stored.share;
   if (json.run) {
     // Handed a session while running one (two check-ins crossed): say so rather than leave it hanging.
     if (runtime.running) {
@@ -275,7 +309,7 @@ async function sync(): Promise<void> {
   for (const job of (json.commands ?? []).slice(0, 5)) {
     runtime.commands = runtime.commands.catch(() => undefined).then(() => runCommand(link, job, stored.owner?.email ?? null));
   }
-  for (const ask of (json.transcripts ?? []).slice(0, 3)) await answerTranscript(link, ask, stored.share);
+  for (const ask of (json.transcripts ?? []).slice(0, 3)) await answerTranscript(link, ask, share);
 }
 
 /** Reads the session logs again. A failed read keeps the last one: checking in matters more than the report. */
@@ -285,10 +319,10 @@ async function rescan(): Promise<void> {
 }
 
 /**
- * Reads a session's transcript for the dashboard and sends it, if this
- * computer shares session content (the server keeps it to whoever the
- * computer shares with). Only a session from this computer's own scan: the
- * server names it, the scan says which file it is.
+ * Reads a session's transcript for the dashboard and sends it, if what
+ * sessions say may reach the website (the server keeps it to whoever sees the
+ * session). Only a session from this computer's own scan: the server names
+ * it, the scan says which file it is.
  */
 async function answerTranscript(link: Link, ask: TranscriptAsk, share: ShareLevel): Promise<void> {
   const logOf = () => (typeof ask.sessionId === "string" && SESSION_ID.test(ask.sessionId) ? runtime.scan?.logs.get(`${ask.tool}:${ask.sessionId}`) : undefined);
@@ -299,7 +333,7 @@ async function answerTranscript(link: Link, ask: TranscriptAsk, share: ShareLeve
     file = logOf();
   }
   let answer: { events?: TranscriptEvent[]; error?: string };
-  if (share === "off") answer = { error: "This computer does not share session content." };
+  if (share === "off") answer = { error: "This computer keeps what its sessions say to itself." };
   else if ((ask.tool !== "claude" && ask.tool !== "codex") || !file) answer = { error: "That session is not on this computer, or is more than 30 days old." };
   else answer = await readTranscript(ask.tool, file).then((events) => ({ events }), (err: unknown) => ({ error: `Could not read the session's log: ${reason(err)}` }));
   await agentFetch(link, "/api/agent/transcripts", "POST", { tool: ask.tool, sessionId: ask.sessionId, ...answer }).catch(() => undefined);
@@ -378,6 +412,7 @@ export async function connect(req: Request): Promise<void> {
   await update((s) => {
     s.link = link;
     s.owner = { userId: link.userId, email: link.email };
+    s.sharing = null; // the account's own, from the first check-in
   });
   runtime.error = null;
   runtime.reported = null; // send the activity report on the first check-in
@@ -391,6 +426,7 @@ export async function disconnect(forget: boolean): Promise<void> {
   if (link) await agentFetch(link, "/api/agent", "DELETE").catch(() => undefined);
   await update((s) => {
     s.link = null;
+    s.sharing = null;
     if (forget) s.owner = null;
   });
   runtime.error = null;
@@ -406,7 +442,7 @@ export async function setRemote(level: RemoteLevel): Promise<void> {
   soon();
 }
 
-/** Who may read what sessions say. Sharing with fewer people also has the server drop the transcripts it keeps from here. */
+/** Whether what sessions say may reach the website. Turning it off also has the server drop the transcripts it keeps from here. */
 export async function setShare(level: ShareLevel): Promise<void> {
   await update((s) => {
     s.share = level;
@@ -426,6 +462,7 @@ export async function deviceState(): Promise<LocalDevice> {
     owner: s.owner,
     remote: s.remote,
     share: s.share,
+    sharing: s.sharing,
     lastSync: runtime.lastSync,
     error: runtime.error,
     running: runtime.running?.run ?? null,
@@ -449,14 +486,22 @@ function refusal(job: RunJob, stored: Stored): string | null {
   if (job.model !== null && (typeof job.model !== "string" || !MODEL_NAME.test(job.model))) return "Unknown model.";
   const folder = typeof job.project === "string" ? runtime.scan?.folders.get(job.project) : undefined;
   if (!folder || !isDirectory(folder)) return "That project is not on this computer (any more).";
+  if (job.resume !== null && (typeof job.resume !== "string" || !SESSION_ID.test(job.resume))) return "Unknown conversation.";
+  const owner = job.by !== null && job.by === stored.owner?.email;
+  // Someone else from the owner's teams (the server says who may; this holds it to what): all of a member's work, or
+  // what the owner shares, a project or the one chat.
+  const shared = stored.sharing;
+  const project = projectName(runtime.scan?.activity ?? null, job.tool, job.project);
+  const theirs = Boolean(
+    shared && (shared.managedBy.length > 0 || shared.all || shared.projects.includes(project) || (job.resume !== null && shared.sessions.includes(`${job.tool}:${job.resume}`))),
+  );
+  if (!owner && !theirs) return "Its owner does not share that project.";
   if (job.resume !== null) {
-    if (typeof job.resume !== "string" || !SESSION_ID.test(job.resume)) return "Unknown conversation.";
-    // A conversation a remote session started here, or one of this computer's own for its owner, and for
-    // the owner's teams only when it shares session content with them: the reply can tell what was said before.
+    // A conversation a remote session started here, or one of this computer's own, for its owner, and for the
+    // others only when what sessions say reaches the website: the reply can tell what was said before.
     const fromHere = stored.runs.some((r) => r.sessionId === job.resume && !r.resumed && r.project === job.project && r.tool === job.tool);
     const own = runtime.scan?.activity.sessions.some((s) => s.id === job.resume && s.tool === job.tool && s.path === job.project);
-    const allowed = job.by !== null && (job.by === stored.owner?.email || stored.share === "team");
-    if (!fromHere && !(own && allowed)) return "That conversation cannot be continued from the website on this computer.";
+    if (!fromHere && !(own && (owner || effectiveShare(stored) !== "off"))) return "That conversation cannot be continued from the website on this computer.";
   }
   return null;
 }
