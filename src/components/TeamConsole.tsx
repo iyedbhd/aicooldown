@@ -70,7 +70,7 @@ function SharingLine({ ws, onShare }: { ws: Workspace; onShare: (change: Sharing
       </p>
     );
   }
-  const { all, projects, sessions } = ws.sharing;
+  const { all, projects, sessions } = ws.shares;
   async function choose(everything: boolean) {
     if (everything === all) return;
     if (
@@ -193,7 +193,10 @@ export function TeamConsole() {
       setUser(u);
       if (!u) return;
       const list = await refreshTeams();
-      const wanted = new URLSearchParams(window.location.search).get("team") ?? storedScope();
+      const params = new URLSearchParams(window.location.search);
+      const wantedTab = TABS.find((t) => t.id === params.get("tab"));
+      if (wantedTab) setTab(wantedTab.id);
+      const wanted = params.get("team") ?? storedScope();
       choose(wanted && (wanted === "me" || list.some((t) => t.id === wanted)) ? wanted : (list[0]?.id ?? "me"));
     },
     [choose, refreshTeams],
@@ -221,7 +224,7 @@ export function TeamConsole() {
     async (change: SharingChange) => {
       const res = await changeSharing(change);
       if (!res.ok) return flash(res.error);
-      setWs((w) => (w ? { ...w, sharing: res.data.sharing } : w));
+      setWs((w) => (w ? { ...w, shares: res.data.shares, sharing: res.data.sharing } : w));
       await loadWorkspace();
     },
     [flash, loadWorkspace],

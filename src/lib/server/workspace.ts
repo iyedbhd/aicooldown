@@ -7,7 +7,7 @@ import { listDevices } from "./devices";
 import { RequestError } from "./request-error";
 import { purgeExpired } from "./retention";
 import { listRuns } from "./runs";
-import { GRANT_ALL, grantFor, grantsAny, policiesOf, relations, showsWork } from "./sharing";
+import { GRANT_ALL, grantFor, grantsAny, policiesOf, relations, showsWork, summaryOf } from "./sharing";
 import { listInvites, roleIn } from "./teams";
 
 const ROLE_ORDER: Record<Role, number> = { owner: 0, admin: 1, member: 2 };
@@ -73,6 +73,6 @@ export async function workspace(viewer: User, scope: string): Promise<Workspace>
     devices: devices.filter((d) => d.userId === p.id),
     accounts: accounts.filter((a) => a.userId === p.id),
   }));
-  const sharing = policies.get(viewer.id) ?? SHARE_NOTHING;
-  return { team, role, me: { id: viewer.id, email: viewer.email }, members, invites, runs: shownRuns, sharing, now: Date.now() };
+  const shares = policies.get(viewer.id) ?? SHARE_NOTHING;
+  return { team, role, me: { id: viewer.id, email: viewer.email }, members, invites, runs: shownRuns, shares, sharing: summaryOf(shares), now: Date.now() };
 }

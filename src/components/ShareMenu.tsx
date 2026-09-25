@@ -47,10 +47,10 @@ export function ShareMenu({ ws, kind, item, project, onShare }: Props) {
   if (!ws.team || !ws.role) return null;
   const team = ws.team;
   const runs = manages(ws.role);
-  const own = audiencesOf(ws.sharing, kind, item);
-  const inherited = kind === "session" && project ? audiencesOf(ws.sharing, "project", project) : [];
+  const own = audiencesOf(ws.shares, kind, item);
+  const inherited = kind === "session" && project ? audiencesOf(ws.shares, "project", project) : [];
   const reach = new Set([...own, ...inherited]);
-  const everything = runs && ws.sharing.all;
+  const everything = runs && ws.shares.all;
   const others = ws.members.filter((m) => m.id !== ws.me.id);
   // A member's owners and admins see all of their work already.
   const managers = new Set(ws.role === "member" ? others.filter((m) => manages(m.role)).map((m) => m.id) : []);

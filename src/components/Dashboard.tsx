@@ -26,6 +26,7 @@ import { Icon } from "./Icon";
 import { Mark, Wordmark } from "./Logo";
 import { Overview } from "./Overview";
 import { LocalPanel } from "./LocalPanel";
+import { MySessions } from "./MySessions";
 import { GitHubGlyph, ProviderTile } from "./ProviderLogo";
 import { ResetTimeline } from "./ResetTimeline";
 import { ThemeToggle } from "./ThemeToggle";
@@ -410,6 +411,8 @@ export function Dashboard() {
           </div>
         </div>
       )}
+
+      {hydrated && <MySessions user={user} now={now} />}
 
       {hydrated && accounts.length === 0 ? (
         <section className="fade-in mt-10 rounded-2xl border border-dashed border-line p-10 text-center">

@@ -78,6 +78,13 @@ export type SharePolicy = { all: boolean; projects: Record<string, Audience[]>; 
 
 export const SHARE_NOTHING: SharePolicy = { all: false, projects: {}, sessions: {} };
 
+/**
+ * What the desktop app's pages up to 0.8 read as your sharing: what reaches
+ * the owners and admins of your teams, as lists. Those pages come with the
+ * app and talk to this server, so the server keeps giving it to them.
+ */
+export type SharingSummary = { all: boolean; projects: string[]; sessions: string[] };
+
 /** The audiences a project (by name) or chat (by sessionKey) of yours is shared with. */
 export const audiencesOf = (policy: SharePolicy, kind: "project" | "session", key: string): Audience[] => (kind === "project" ? policy.projects[key] : policy.sessions[key]) ?? [];
 
@@ -295,7 +302,9 @@ export type Workspace = {
   invites: Invite[];
   runs: Run[];
   /** What you share, and with whom. */
-  sharing: SharePolicy;
+  shares: SharePolicy;
+  /** The same as the desktop app's pages up to 0.8 read it: see SharingSummary. */
+  sharing: SharingSummary;
   /** The server's clock, to judge "seen 2 minutes ago" without trusting the browser's. */
   now: number;
 };
@@ -355,7 +364,7 @@ export const removeDevice = (deviceId: string) => requestJson("/api/devices", { 
 export const renameDevice = (deviceId: string, label: string) => requestJson("/api/devices", { method: "PATCH", body: { deviceId, label } });
 /** Shares everything with the owners and admins of your teams, or what you pick; or shares a project (by name) or one session (by sessionKey) with an audience, or stops. */
 export type SharingChange = { all: boolean } | { project: string; audience: Audience; shared: boolean } | { session: string; audience: Audience; shared: boolean };
-export const changeSharing = (change: SharingChange) => requestJson<{ sharing: SharePolicy }>("/api/sharing", { method: "POST", body: change });
+export const changeSharing = (change: SharingChange) => requestJson<{ shares: SharePolicy; sharing: SharingSummary }>("/api/sharing", { method: "POST", body: change });
 export const startRun = (run: NewRun) => requestJson<{ run: Run }>("/api/runs", { method: "POST", body: run });
 export const fetchRun = (id: string, after: number) => requestJson<{ run: Run; events: RunEvent[] }>(`/api/runs/${id}?after=${after}`);
 export const cancelRun = (id: string) => requestJson(`/api/runs/${id}`, { method: "DELETE", body: {} });

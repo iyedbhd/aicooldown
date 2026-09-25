@@ -13,6 +13,7 @@ import {
   type DeviceSharing,
   type Grant,
   type SharePolicy,
+  type SharingSummary,
 } from "../team";
 import type { User } from "./auth";
 import { openJson, sealJson } from "./crypto";
@@ -112,6 +113,12 @@ export function grantFor(policy: SharePolicy, viewerId: string, rel: Relation): 
     projects: Object.entries(policy.projects).filter(reaches).map(([name]) => name),
     sessions: Object.entries(policy.sessions).filter(reaches).map(([key]) => key),
   };
+}
+
+/** What reaches the owners and admins, as the desktop app's pages up to 0.8 read it (see SharingSummary). */
+export function summaryOf(policy: SharePolicy): SharingSummary {
+  const withAdmins = (items: Record<string, Audience[]>) => Object.keys(items).filter((key) => items[key].includes(ADMINS));
+  return { all: policy.all, projects: withAdmins(policy.projects), sessions: withAdmins(policy.sessions) };
 }
 
 /** Whether a grant shows anything at all. */
