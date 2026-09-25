@@ -75,7 +75,7 @@ export function Overview({ accounts, usages, resets, now }: Props) {
   );
 }
 
-function Tile({ label, title, children }: { label: string; title: string; children: React.ReactNode }) {
+export function Tile({ label, title, children }: { label: string; title: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0 bg-panel px-5 py-4" title={title}>
       <p className="eyebrow">{label}</p>
@@ -84,10 +84,10 @@ function Tile({ label, title, children }: { label: string; title: string; childr
   );
 }
 
-function Big({ children }: { children: React.ReactNode }) {
+export function Big({ children }: { children: React.ReactNode }) {
   return <div className="truncate font-mono text-2xl font-semibold tabular-nums text-fg">{children}</div>;
 }
 
-function Note({ children }: { children: React.ReactNode }) {
+export function Note({ children }: { children: React.ReactNode }) {
   return <p className="mt-1 truncate font-mono text-[11px] text-muted">{children}</p>;
 }

@@ -33,7 +33,8 @@ type Meta = { id: string; provider: Provider; key: string; label: string; plan?:
 /** Where a login lives: the CLI's live files, or a saved profile directory. */
 type Place = { dir: string; claudeConfig: string };
 
-function livePlace(provider: Provider): Place {
+/** Where the CLI keeps the login it uses now, and its session logs. */
+export function livePlace(provider: Provider): Place {
   if (provider === "codex") return { dir: process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), claudeConfig: "" };
   const custom = process.env.CLAUDE_CONFIG_DIR;
   return custom
@@ -315,14 +316,27 @@ export async function sessionResetAt(id: string): Promise<number | null> {
 const HELLO = "hello";
 const HELLO_TIMEOUT_MS = 3 * 60_000;
 
-function cliCommand(provider: Provider): { bin: string; args: string[] } {
-  if (provider === "claude") return { bin: "claude", args: ["-p", HELLO, "--model", "haiku", "--no-session-persistence", "--strict-mcp-config"] };
-  // The Codex desktop app on Windows bundles the CLI without putting it on PATH.
-  const bundled = process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs", "Codex", "resources", "codex.exe");
-  // The ignore comment stops the build from tracing (and bundling) every file this path could match.
-  const bin = process.platform === "win32" && bundled && existsSync(/* turbopackIgnore: true */ bundled) ? bundled : "codex";
-  return { bin, args: ["exec", "--skip-git-repo-check", "--ephemeral", "--color", "never", HELLO] };
+/**
+ * How to start a CLI: its executable, and whether it needs a shell (Windows
+ * resolves the claude.cmd / codex.cmd shims through one). The name stays
+ * unquoted: cmd.exe resolves a quoted one's %~dp0, which npm's shims rely on,
+ * to the working folder.
+ */
+export function cliBin(provider: Provider): { bin: string; shell: boolean } {
+  let bin: string = provider;
+  if (provider === "codex") {
+    // The Codex desktop app on Windows bundles the CLI without putting it on PATH.
+    const bundled = process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs", "Codex", "resources", "codex.exe");
+    // The ignore comment stops the build from tracing (and bundling) every file this path could match.
+    if (process.platform === "win32" && bundled && existsSync(/* turbopackIgnore: true */ bundled)) bin = bundled;
+  }
+  return { bin, shell: process.platform === "win32" && !bin.endsWith(".exe") };
 }
+
+const HELLO_ARGS: Record<Provider, string[]> = {
+  claude: ["-p", HELLO, "--model", "haiku", "--no-session-persistence", "--strict-mcp-config"],
+  codex: ["exec", "--skip-git-repo-check", "--ephemeral", "--color", "never", HELLO],
+};
 
 /**
  * The server's own environment may carry auth for a different account (e.g.
@@ -337,6 +351,9 @@ function childEnv(provider: Provider, place: Place, active: boolean): NodeJS.Pro
   return env;
 }
 
+/** The environment for running the CLI as the login it uses now. */
+export const liveEnv = (provider: Provider) => childEnv(provider, livePlace(provider), true);
+
 /**
  * Sends "hello" through the provider's CLI as this login, which starts its
  * 5-hour session window. Resolves with the CLI's reply, rejects with its error.
@@ -344,11 +361,10 @@ function childEnv(provider: Provider, place: Place, active: boolean): NodeJS.Pro
 export async function sayHello(id: string): Promise<string> {
   const meta = await getMeta(id);
   const { place, active } = await placeFor(meta);
-  const { bin, args } = cliCommand(meta.provider);
-  const shell = process.platform === "win32" && !bin.endsWith(".exe"); // resolves claude.cmd / codex.cmd shims
+  const { bin, shell } = cliBin(meta.provider);
   return new Promise((resolve, reject) => {
     // An installed CLI, never a project file: the comment stops the build from tracing the whole project.
-    const child = spawn(/* turbopackIgnore: true */ shell ? `"${bin}"` : bin, args, {
+    const child = spawn(/* turbopackIgnore: true */ bin, HELLO_ARGS[meta.provider], {
       cwd: os.tmpdir(),
       env: childEnv(meta.provider, place, active),
       shell,

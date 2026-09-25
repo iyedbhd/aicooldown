@@ -29,7 +29,7 @@ const SERVER_ENTRIES = new Set(["server.js", "package.json", ".next", "node_modu
 /** The app's own files in desktop/; electron-builder adds its production dependencies (electron-updater) and package.json. */
 const APP_FILES = ["main.mjs", "preload.cjs", "icon.ico", "icon.png"];
 /** Files that only ever hold local state or secrets. */
-const PRIVATE_FILE = /(^|\/)(\.env[^/]*|\.git|\.vercel|cli-profiles|\.credentials\.json|local-schedules\.json|app-secret|[^/]+\.(db|sqlite3?|pem|key))(\/|$)/;
+const PRIVATE_FILE = /(^|\/)(\.env[^/]*|\.git|\.vercel|cli-profiles|\.credentials\.json|local-schedules\.json|device\.json|activity-cache\.json|app-secret|[^/]+\.(db|sqlite3?|pem|key))(\/|$)/;
 /**
  * Credential shapes: Anthropic keys and OAuth tokens, JWTs (Codex and Vercel tokens), GitHub tokens, and
  * private keys with key material after the header (TLS libraries carry the bare header as a constant).

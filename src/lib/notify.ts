@@ -44,6 +44,11 @@ function send(title: string, body: string, tag: string): void {
   }
 }
 
+/** A one-off notification, when the user turned them on. */
+export function notifyIfEnabled(title: string, body: string, tag: string): void {
+  if (notifyEnabled()) send(title, body, tag);
+}
+
 /**
  * Compares two consecutive usage answers for one account and notifies on the
  * transitions people actually wait for: a window resetting, crossing 90%,

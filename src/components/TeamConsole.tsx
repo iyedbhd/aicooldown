@@ -1,0 +1,444 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchSession, type SessionUser } from "@/lib/session";
+import { createTeam, deleteTeam, fetchTeams, fetchWorkspace, manages, removeMember, renameTeam, type Run, type TeamSummary, type Workspace } from "@/lib/team";
+import { allSessions, liveNow, PERIODS, type Period } from "@/lib/team-stats";
+import { AuthDialog } from "./AuthDialog";
+import { Icon } from "./Icon";
+import { Mark, Wordmark } from "./Logo";
+import { RunPanel } from "./RunPanel";
+import { SessionPanel } from "./SessionPanel";
+import { RoleBadge } from "./TeamBits";
+import { TeamComputers } from "./TeamComputers";
+import { TeamOverview } from "./TeamOverview";
+import { TeamPeople } from "./TeamPeople";
+import { TeamProjects } from "./TeamProjects";
+import { NO_FILTER, TeamSessions, type SessionFilter } from "./TeamSessions";
+import { ThemeToggle } from "./ThemeToggle";
+
+type Tab = "overview" | "people" | "computers" | "projects" | "sessions";
+
+const TABS: { id: Tab; label: string; icon: Parameters<typeof Icon>[0]["name"] }[] = [
+  { id: "overview", label: "Overview", icon: "gauge" },
+  { id: "people", label: "People", icon: "users" },
+  { id: "computers", label: "Computers", icon: "monitor" },
+  { id: "projects", label: "Projects", icon: "folder" },
+  { id: "sessions", label: "Sessions", icon: "terminal" },
+];
+
+const POLL_MS = 30_000;
+/** The workspace last looked at, per browser. */
+const SCOPE_KEY = "aic:team-scope";
+
+const input = "rounded-lg border border-line bg-panel-2 px-3 py-1.5 text-sm text-fg placeholder:text-faint focus:border-muted focus:outline-none";
+
+function storedScope(): string | null {
+  try {
+    return localStorage.getItem(SCOPE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The team page: a workspace (just you, or one of your teams) with its
+ * people, their computers and projects, what they use, and remote sessions.
+ */
+export function TeamConsole() {
+  /** undefined until known. */
+  const [user, setUser] = useState<SessionUser | null | undefined>(undefined);
+  const [teams, setTeams] = useState<TeamSummary[]>([]);
+  const [scope, setScope] = useState<string | null>(null);
+  const [ws, setWs] = useState<Workspace | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("overview");
+  const [period, setPeriod] = useState<Period>(7);
+  const [now, setNow] = useState(() => Date.now());
+  const [note, setNote] = useState<string | null>(null);
+  const [runId, setRunId] = useState<string | null>(null);
+  /** The session open in its panel, by SessionRow key. */
+  const [sessionKey, setSessionKey] = useState<string | null>(null);
+  const [filter, setFilter] = useState<SessionFilter>(NO_FILTER);
+  const [sessionDevice, setSessionDevice] = useState<string | undefined>(undefined);
+  const [showAuth, setShowAuth] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [teamName, setTeamName] = useState("");
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const scopeRef = useRef<string | null>(null);
+
+  const flash = useCallback((text: string) => {
+    setNote(text);
+    setTimeout(() => setNote((n) => (n === text ? null : n)), 6000);
+  }, []);
+
+  const refreshTeams = useCallback(async () => {
+    const res = await fetchTeams();
+    if (res.ok) setTeams(res.data.teams);
+    return res.ok ? res.data.teams : [];
+  }, []);
+
+  /** Shows another workspace; the effect below loads it. */
+  const choose = useCallback((next: string) => {
+    if (scopeRef.current !== next) {
+      setWs(null);
+      setFilter(NO_FILTER);
+      setSessionKey(null);
+    }
+    scopeRef.current = next;
+    setScope(next);
+    setError(null);
+    try {
+      localStorage.setItem(SCOPE_KEY, next);
+    } catch {
+      /* remembering it is a nicety */
+    }
+    const url = new URL(window.location.href);
+    if (next === "me") url.searchParams.delete("team");
+    else url.searchParams.set("team", next);
+    window.history.replaceState(null, "", url);
+  }, []);
+
+  const loadWorkspace = useCallback(async () => {
+    const target = scopeRef.current;
+    if (!target) return;
+    const res = await fetchWorkspace(target);
+    if (scopeRef.current !== target) return; // switched meanwhile
+    if (res.ok) {
+      setWs(res.data);
+      setError(null);
+    } else if (res.code === "signed_out") {
+      setUser(null);
+    } else if (res.status === 404 && target !== "me") {
+      await refreshTeams();
+      choose("me");
+      flash("You are no longer in that team.");
+    } else {
+      setError(res.error);
+    }
+  }, [choose, flash, refreshTeams]);
+
+  /** Signed in (or not): their teams, and the workspace the address or this browser last showed. */
+  const begin = useCallback(
+    async (u: SessionUser | null) => {
+      setUser(u);
+      if (!u) return;
+      const list = await refreshTeams();
+      const wanted = new URLSearchParams(window.location.search).get("team") ?? storedScope();
+      choose(wanted && (wanted === "me" || list.some((t) => t.id === wanted)) ? wanted : (list[0]?.id ?? "me"));
+    },
+    [choose, refreshTeams],
+  );
+
+  useEffect(() => {
+    void fetchSession().then(begin);
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [begin]);
+
+  useEffect(() => {
+    if (!scope) return;
+    void loadWorkspace();
+    const poll = setInterval(() => document.visibilityState === "visible" && void loadWorkspace(), POLL_MS);
+    return () => clearInterval(poll);
+  }, [scope, loadWorkspace]);
+
+  const reload = useCallback(async () => {
+    await Promise.all([loadWorkspace(), refreshTeams()]);
+  }, [loadWorkspace, refreshTeams]);
+
+  async function submitTeam(e: React.FormEvent) {
+    e.preventDefault();
+    const res = await createTeam(teamName);
+    if (!res.ok) return flash(res.error);
+    setCreating(false);
+    setTeamName("");
+    await refreshTeams();
+    choose(res.data.team.id);
+    setTab("people");
+    flash(`${res.data.team.name} is ready. Invite the people you work with.`);
+  }
+
+  async function saveName() {
+    const name = renaming?.trim();
+    setRenaming(null);
+    if (!ws?.team || !name || name === ws.team.name) return;
+    const res = await renameTeam(ws.team.id, name);
+    if (!res.ok) return flash(res.error);
+    await reload();
+  }
+
+  async function leaveOrDelete() {
+    if (!ws?.team) return;
+    const owner = ws.role === "owner";
+    const question = owner
+      ? `Delete ${ws.team.name}? Its members keep their accounts, computers and sessions; only the team goes.`
+      : `Leave ${ws.team.name}? Its owner and admins stop seeing your computers, usage and limits.`;
+    if (!window.confirm(question)) return;
+    const res = owner ? await deleteTeam(ws.team.id) : await removeMember(ws.team.id, ws.me.id);
+    if (!res.ok) return flash(res.error);
+    await refreshTeams();
+    choose("me");
+    flash(owner ? "Team deleted." : "You left the team.");
+  }
+
+  function openSessionOn(deviceId: string) {
+    setSessionDevice(deviceId);
+    setTab("sessions");
+  }
+
+  /** The Sessions tab, showing a person's, a computer's or a project's sessions. */
+  function showSessions(only: Partial<SessionFilter> = {}) {
+    setFilter({ ...NO_FILTER, ...only });
+    setTab("sessions");
+  }
+
+  function openRun(id: string) {
+    setSessionKey(null);
+    setRunId(id);
+  }
+
+  function started(run: Run) {
+    setRunId(run.id);
+    void loadWorkspace();
+  }
+
+  const devices = ws?.members.flatMap((m) => m.devices) ?? [];
+  const sessions = ws ? allSessions(ws, now) : [];
+  const live = ws ? liveNow(ws, sessions) : null;
+  const liveCount = live ? live.sessions.length + live.runs.length : 0;
+  const openSession = sessionKey ? sessions.find((s) => s.key === sessionKey) : undefined;
+
+  return (
+    <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
+      <header className="border-b border-line pb-4">
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+          <Link href="/" className="flex items-center gap-3">
+            <Mark size={40} animated />
+            <div>
+              <div className="text-2xl leading-none">
+                <Wordmark />
+              </div>
+              <p className="eyebrow mt-1.5">teams · computers · sessions</p>
+            </div>
+          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            {user && <span className="mr-1 max-w-[16rem] truncate font-mono text-[11px] text-muted">{user.email}</span>}
+            <ThemeToggle className="btn" />
+            <Link href="/" className="btn">
+              <Icon name="gauge" />
+              Limits
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      {note && (
+        <div role="status" className="toast fixed bottom-4 right-4 z-40 max-w-sm rounded-xl border border-line bg-panel px-4 py-3 text-sm text-fg-2 shadow-lg">
+          {note}
+        </div>
+      )}
+
+      {user === null && (
+        <section className="fade-in mx-auto mt-12 max-w-xl rounded-2xl border border-dashed border-line p-10 text-center">
+          <Icon name="users" size={30} className="mx-auto text-faint" />
+          <h1 className="mt-3 text-lg font-medium text-fg">Your team&apos;s AI work in one place</h1>
+          <p className="mt-2 text-sm text-muted">
+            Invite the people you work with and see each one&apos;s connected computers, every Claude Code and Codex session on them and the projects they work
+            on, the tokens those use and what that is worth, how close their accounts are to their limits, and start Claude Code or Codex sessions on a computer
+            from here. Teams need an account.
+          </p>
+          <button type="button" onClick={() => setShowAuth(true)} className="btn btn-primary mt-6">
+            <Icon name="user" />
+            Sign in or create an account
+          </button>
+        </section>
+      )}
+
+      {user && (
+        <>
+          <nav className="mt-4 flex flex-wrap items-center gap-2" aria-label="Workspaces">
+            {[{ id: "me", name: "Just me" }, ...teams].map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => choose(t.id)}
+                aria-pressed={scope === t.id}
+                className={`btn ${scope === t.id ? "btn-accent" : ""}`}
+              >
+                <Icon name={t.id === "me" ? "user" : "users"} />
+                {t.name}
+              </button>
+            ))}
+            {creating ? (
+              <form onSubmit={submitTeam} className="flex items-center gap-2">
+                <input autoFocus required maxLength={60} value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="Team name" aria-label="Team name" className={input} />
+                <button type="submit" className="btn btn-primary">
+                  Create
+                </button>
+                <button type="button" onClick={() => setCreating(false)} className="btn">
+                  Cancel
+                </button>
+              </form>
+            ) : (
+              <button type="button" onClick={() => setCreating(true)} className="btn">
+                <Icon name="plus" />
+                New team
+              </button>
+            )}
+          </nav>
+
+          <div className="mt-6 flex flex-wrap items-end justify-between gap-3">
+            <div className="min-w-0">
+              {ws?.team ? (
+                <>
+                  <p className="eyebrow flex items-center gap-2">
+                    team {ws.role && <RoleBadge role={ws.role} />}
+                  </p>
+                  {renaming !== null ? (
+                    <input
+                      autoFocus
+                      value={renaming}
+                      maxLength={60}
+                      onChange={(e) => setRenaming(e.target.value)}
+                      onBlur={() => void saveName()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void saveName();
+                        if (e.key === "Escape") setRenaming(null);
+                      }}
+                      aria-label="Team name"
+                      className="mt-1 w-full border-b border-muted bg-transparent text-2xl font-semibold text-fg focus:outline-none"
+                    />
+                  ) : (
+                    <h1 className="mt-1 text-2xl font-semibold text-fg">
+                      {manages(ws.role) ? (
+                        <button type="button" onClick={() => setRenaming(ws.team!.name)} className="group flex items-center gap-2 text-left" title="Rename">
+                          {ws.team.name}
+                          <span className="text-[11px] font-normal text-faint opacity-0 transition-opacity group-hover:opacity-100">edit</span>
+                        </button>
+                      ) : (
+                        ws.team.name
+                      )}
+                    </h1>
+                  )}
+                  <p className="mt-1 text-sm text-muted">
+                    {ws.members.length} {ws.members.length === 1 ? "person" : "people"}
+                    {manages(ws.role) ? ` · ${devices.length} computer${devices.length === 1 ? "" : "s"}, ${devices.filter((d) => d.online).length} online` : ""}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="eyebrow">personal</p>
+                  <h1 className="mt-1 text-2xl font-semibold text-fg">Just you</h1>
+                  <p className="mt-1 text-sm text-muted">
+                    Your connected computers, their Claude Code and Codex sessions, and what they work on. Create a team to see the same for the people you work with.
+                  </p>
+                </>
+              )}
+            </div>
+            {ws?.team && (
+              <button type="button" onClick={() => void leaveOrDelete()} className="btn border-rose-500/40 text-rose-600 dark:text-rose-400">
+                <Icon name={ws.role === "owner" ? "trash" : "logout"} />
+                {ws.role === "owner" ? "Delete team" : "Leave team"}
+              </button>
+            )}
+          </div>
+
+          <div className="mt-5 flex flex-wrap items-end justify-between gap-3 border-b border-line">
+            <div role="tablist" aria-label="Sections" className="-mb-px flex gap-1 overflow-x-auto">
+              {TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === t.id}
+                  onClick={() => setTab(t.id)}
+                  className={`flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-sm transition ${tab === t.id ? "border-fg text-fg" : "border-transparent text-muted hover:text-fg-2"}`}
+                >
+                  <Icon name={t.icon} size={13} />
+                  {t.label}
+                  {t.id === "sessions" && liveCount > 0 && (
+                    <span className="rounded-full bg-emerald-500/15 px-1.5 font-mono text-[10px] text-emerald-700 dark:text-emerald-300" title="live now">
+                      {liveCount}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            {tab !== "sessions" && (
+              <div role="group" aria-label="Period" className="mb-2 flex items-center gap-0.5 rounded-lg border border-line bg-panel p-0.5">
+                {PERIODS.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    aria-pressed={period === p}
+                    onClick={() => setPeriod(p)}
+                    className={`rounded-md px-2 py-0.5 font-mono text-[11px] transition ${period === p ? "bg-panel-3 text-fg" : "text-muted hover:text-fg-2"}`}
+                  >
+                    {p} days
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="mt-5">
+            {error && <p className="mb-4 rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-700 dark:text-rose-200">{error}</p>}
+            {!ws && !error && (
+              <div className="space-y-3" aria-label="Loading">
+                <div className="shimmer h-24 rounded-2xl" />
+                <div className="shimmer h-48 rounded-2xl" />
+              </div>
+            )}
+            {ws && tab === "overview" && (
+              <TeamOverview
+                ws={ws}
+                sessions={sessions}
+                period={period}
+                now={now}
+                onOpenRun={openRun}
+                onOpenSession={setSessionKey}
+                onShowSessions={() => showSessions()}
+                onShowComputers={() => setTab("computers")}
+              />
+            )}
+            {ws && tab === "people" && (
+              <TeamPeople ws={ws} sessions={sessions} period={period} now={now} reload={reload} flash={flash} onOpenSession={setSessionKey} onShowSessions={showSessions} />
+            )}
+            {ws && tab === "computers" && (
+              <TeamComputers ws={ws} sessions={sessions} period={period} now={now} reload={reload} flash={flash} onNewSession={openSessionOn} onShowSessions={showSessions} />
+            )}
+            {ws && tab === "projects" && <TeamProjects ws={ws} period={period} now={now} onShowSessions={showSessions} />}
+            {ws && tab === "sessions" && (
+              <TeamSessions
+                ws={ws}
+                sessions={sessions}
+                now={now}
+                filter={filter}
+                onFilter={setFilter}
+                deviceId={sessionDevice}
+                onStarted={started}
+                onOpenRun={openRun}
+                onOpenSession={setSessionKey}
+              />
+            )}
+          </div>
+        </>
+      )}
+
+      {openSession && <SessionPanel key={openSession.key} session={openSession} now={now} onClose={() => setSessionKey(null)} onOpenRun={openRun} />}
+      {runId && ws && <RunPanel key={runId} runId={runId} ws={ws} now={now} onClose={() => setRunId(null)} onOpen={started} />}
+      {showAuth && (
+        <AuthDialog
+          localCount={0}
+          onClose={() => setShowAuth(false)}
+          onSignedIn={(u) => {
+            setShowAuth(false);
+            void begin(u);
+          }}
+        />
+      )}
+    </main>
+  );
+}

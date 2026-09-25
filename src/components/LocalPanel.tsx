@@ -1,10 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { formatAgo, formatCountdown, formatDateTime, formatPlan } from "@/lib/format";
 import { fetchLocalState, localAction, type CliProfile, type LocalAction, type LocalState, type ScheduleMode } from "@/lib/local";
+import { notifyIfEnabled } from "@/lib/notify";
+import type { SessionUser } from "@/lib/session";
+import { TOOL_NAME } from "@/lib/team";
 import type { Provider } from "@/lib/types";
 import { DesktopApp } from "./DesktopApp";
+import { DevicePanel } from "./DevicePanel";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
 
@@ -33,44 +37,62 @@ function inAnHour(): string {
  * Switches which saved login each CLI uses, and says hello through the CLI to
  * start a login's 5-hour window now or on a schedule.
  */
-export function LocalPanel({ now, onNote }: { now: number; onNote: (text: string) => void }) {
+export function LocalPanel({ now, user, onNote }: { now: number; user: SessionUser | null; onNote: (text: string) => void }) {
   /** undefined until the first answer, null when this copy does not run on the user's computer. */
   const [state, setState] = useState<LocalState | null | undefined>(undefined);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Remote sessions already seen, so each new one someone else starts here is announced once. */
+  const seenRuns = useRef<Set<string> | null>(null);
+
+  const show = useCallback((next: LocalState) => {
+    const ids = next.device.recent.map((r) => r.id);
+    if (seenRuns.current) {
+      for (const r of next.device.recent) {
+        if (seenRuns.current.has(r.id) || r.by === next.device.owner?.email) continue;
+        notifyIfEnabled(`A remote ${TOOL_NAME[r.tool]} session started on this computer`, `${r.by ?? "Someone"}: ${r.prompt.slice(0, 140)}`, `run:${r.id}`);
+      }
+    }
+    seenRuns.current = new Set(ids);
+    setState(next);
+  }, []);
 
   // A failed refresh keeps what is on screen.
   const reload = useCallback(async () => {
     const next = await fetchLocalState();
-    if (next) setState(next);
-  }, []);
+    if (next) show(next);
+  }, [show]);
 
   useEffect(() => {
     let alive = true;
     let id: ReturnType<typeof setInterval> | undefined;
     void fetchLocalState().then((first) => {
       if (!alive) return;
-      setState(first);
-      // Scheduled hellos run on the server; pick up their results. Nothing to poll on the website.
+      if (first) show(first);
+      else setState(null);
+      // Scheduled hellos and remote sessions run on the server; pick up their results. Nothing to poll on the website.
       if (first) id = setInterval(() => void reload(), REFRESH_MS);
     });
     return () => {
       alive = false;
       clearInterval(id);
     };
-  }, [reload]);
+  }, [reload, show]);
 
-  async function run(key: string, body: LocalAction, done?: string) {
-    setBusy(key);
-    const res = await localAction(body);
-    setBusy(null);
-    if (res.ok) {
-      setState(res.data);
-      if (done) onNote(done);
-    } else {
-      onNote(res.error);
-      void reload();
-    }
-  }
+  const run = useCallback(
+    async (key: string, body: LocalAction, done?: string) => {
+      setBusy(key);
+      const res = await localAction(body);
+      setBusy(null);
+      if (res.ok) {
+        show(res.data);
+        if (done) onNote(done);
+      } else {
+        onNote(res.error);
+        void reload();
+      }
+    },
+    [onNote, reload, show],
+  );
 
   if (state === undefined) return null;
   if (state === null) return <DesktopApp />;
@@ -79,9 +101,10 @@ export function LocalPanel({ now, onNote }: { now: number; onNote: (text: string
     <section className="mt-8">
       <h2 className="mb-1 text-sm font-medium text-muted">This machine</h2>
       <p className="mb-3 text-xs text-faint">
-        Only in a copy running on your computer. Switch the login the Claude Code and Codex CLIs use in your terminal, or say hello to start a 5-hour window
-        now so it resets sooner.
+        Only in a copy running on your computer. Connect it to your account and team, switch the login the Claude Code and Codex CLIs use in your terminal, or
+        say hello to start a 5-hour window now so it resets sooner.
       </p>
+      <DevicePanel device={state.device} user={user} now={now} busy={busy} run={run} />
       <div className="grid gap-4 md:grid-cols-2">
         {(["claude", "codex"] as const).map((provider) => {
           const live = state.live[provider];

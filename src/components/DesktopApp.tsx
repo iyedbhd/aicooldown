@@ -42,7 +42,8 @@ export function DesktopApp() {
       <h2 className="mb-1 text-sm font-medium text-muted">Desktop app</h2>
       <p className="mb-3 text-xs text-faint">
         This dashboard as an app on your own computer, in its own window, plus what a website cannot do: switch which account the Claude Code and Codex
-        CLIs are logged in with, and say hello on a schedule so a 5-hour window starts before you need it. Your {SITE.name} account works there too.
+        CLIs are logged in with, say hello on a schedule so a 5-hour window starts before you need it, and connect the computer to your team, so what it
+        works on shows on the Team page and, if you allow it, Claude Code or Codex sessions can be started on it from there. Your {SITE.name} account works there too.
       </p>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-line bg-panel px-4 py-3">
         {primary && (

@@ -35,7 +35,9 @@ export default function Page() {
               official usage endpoints the Claude Code and Codex CLIs use, and shows every window for every account on one page: the 5-hour session, the weekly
               limit, the per-model weekly limits such as Fable, a live countdown to each reset, which window is limiting you, and which account to use next.
               Tokens are encrypted at rest when you sign in, or stay in your browser when you do not, and you can self-host it. The desktop app for
-              Windows, macOS and Linux adds switching which account the Claude Code and Codex CLIs are logged in with.
+              Windows, macOS and Linux adds switching which account the Claude Code and Codex CLIs are logged in with. Teams see, per person, the
+              computers they connected, the projects they work on with their token usage and API value, and their accounts&apos; limits, and can start Claude
+              Code sessions on a teammate&apos;s computer where that computer allows it.
             </p>
           </div>
           <div>

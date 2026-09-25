@@ -19,6 +19,14 @@ export function str(body: Record<string, unknown>, key: string): string | undefi
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
+/** This server's address as the browser sees it, for links it hands out. Only Vercel's own proxy is trusted to say it with x-forwarded-host. */
+export function publicOrigin(req: Request): string {
+  const url = new URL(req.url);
+  const host = (process.env.VERCEL ? req.headers.get("x-forwarded-host") : null) ?? req.headers.get("host") ?? url.host;
+  const proto = req.headers.get("x-forwarded-proto")?.split(",")[0].trim() || url.protocol.slice(0, -1);
+  return `${proto}://${host}`;
+}
+
 export function errorResponse(err: unknown): NextResponse {
   if (err instanceof ProviderError) return NextResponse.json({ error: err.message }, { status: err.status });
   const message = err instanceof Error ? err.message : "Unexpected error";

@@ -37,6 +37,16 @@ export function accountsServerHost(): string | null {
 }
 
 /**
+ * Where signing in keeps accounts, as seen from a request to this copy, and
+ * the session it is signed in with there: the accounts server, or this copy
+ * itself. Throws on a bad AICOOLDOWN_ACCOUNTS_SERVER.
+ */
+export function accountsTarget(req: Request): { origin: string; session: string | null } {
+  const origin = serverOrigin();
+  return origin ? { origin, session: readCookie(req, FORWARDED_COOKIE) } : { origin: new URL(req.url).origin, session: readCookie(req) };
+}
+
+/**
  * The accounts server's answer when this copy forwards accounts, or null to
  * handle the request here. `body` is the parsed JSON when the route already
  * read it.

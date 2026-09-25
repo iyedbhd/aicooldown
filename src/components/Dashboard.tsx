@@ -6,6 +6,7 @@ import { postJson } from "@/lib/api";
 import { desktopApp } from "@/lib/desktop";
 import { formatAgo, formatCountdown, formatDateTime, formatPlan } from "@/lib/format";
 import { dropHistory, loadHistory, recordSamples, type History } from "@/lib/history";
+import { localAction } from "@/lib/local";
 import { notifyChanges, notifyEnabled, requestNotifyPermission, setNotifyEnabled } from "@/lib/notify";
 import { POLL_INTERVAL_MS, backoffMs } from "@/lib/poll";
 import { codexIdentityFromTokens } from "@/lib/providers/codex";
@@ -220,12 +221,16 @@ export function Dashboard() {
 
   async function handleSignOut() {
     await signOut();
+    // A computer connected to the account stops reporting to it; it reconnects when the same account signs in here again.
+    // Only a copy on the user's computer has one: elsewhere this answers 404.
+    await localAction({ action: "disconnect", forget: false });
     setUser(null);
     await switchStore(localStore);
   }
 
   async function handleAccountDeleted() {
     setShowAccount(false);
+    await localAction({ action: "disconnect", forget: true });
     setUser(null);
     await switchStore(localStore);
     setNote("Your account and everything stored on the server are gone.");
@@ -345,6 +350,10 @@ export function Dashboard() {
                 Sign in
               </button>
             )}
+            <Link href="/team" title="Your team: people, computers, projects, token usage and remote sessions" className={btn}>
+              <Icon name="users" />
+              Team
+            </Link>
             <a href={SITE.repo} target="_blank" rel="noopener noreferrer" title="Open source · star the repo on GitHub" className={btn}>
               <Icon name="star" fill className="text-amber-400" />
               Star us on GitHub
@@ -462,7 +471,7 @@ export function Dashboard() {
         </>
       )}
 
-      {hydrated && <LocalPanel now={now} onNote={flash} />}
+      {hydrated && <LocalPanel now={now} user={user} onNote={flash} />}
 
       <footer className="mt-12 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-line pt-4 font-mono text-[11px] text-faint">
         <span>

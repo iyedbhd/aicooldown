@@ -87,7 +87,7 @@ jobs:
           cat > notes.md <<'EOF'
           The AI Cooldown dashboard as an app on your own computer, with the **This machine** features the website cannot offer: switch which account the Claude Code and Codex CLIs are logged in with, and say hello on a schedule so a 5-hour window starts before you need it.
 
-          Sign in with your aicooldown.com account to see the same synced accounts as on the website, or stay a guest and keep everything on your computer.
+          Sign in with your aicooldown.com account to see the same synced accounts as on the website, or stay a guest and keep everything on your computer. Signed in, **Connect this computer** puts it on the Team page with its Claude Code and Codex sessions, the projects they work on and their token usage. You choose there whether Claude Code or Codex sessions may be started on it from the browser, and whether what its sessions say is shared (both off until you choose).
 
           | System | File | |
           | --- | --- | --- |

@@ -1,6 +1,7 @@
-import type { Account, Provider, TokenSet } from "../types";
+import type { MemberAccount } from "../team";
+import type { Account, Provider, TokenSet, Usage } from "../types";
 import { decrypt, encrypt, newId } from "./crypto";
-import { db, ensureSchema } from "./db";
+import { db, ensureSchema, placeholders } from "./db";
 
 /** What the browser sees for a stored account: everything except the tokens. */
 export type PublicAccount = Omit<Account, "accessToken" | "refreshToken">;
@@ -95,5 +96,34 @@ export async function updateTokens(userId: string, id: string, t: TokenSet): Pro
 
 export async function deleteAccount(userId: string, id: string): Promise<void> {
   await ensureSchema();
-  await db().execute({ sql: "DELETE FROM linked_accounts WHERE user_id = ? AND id = ?", args: [userId, id] });
+  await db().batch(
+    [
+      { sql: "DELETE FROM account_usage WHERE account_id IN (SELECT id FROM linked_accounts WHERE user_id = ? AND id = ?)", args: [userId, id] },
+      { sql: "DELETE FROM linked_accounts WHERE user_id = ? AND id = ?", args: [userId, id] },
+    ],
+    "write",
+  );
+}
+
+/** Keeps the latest usage read for a stored account, so a team's admins see it without calling the provider again. */
+export async function saveUsage(id: string, usage: Usage): Promise<void> {
+  await ensureSchema();
+  await db().execute({
+    sql: "INSERT INTO account_usage (account_id, usage, fetched_at) VALUES (?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET usage = excluded.usage, fetched_at = excluded.fetched_at",
+    args: [id, JSON.stringify(usage), Date.parse(usage.fetchedAt) || Date.now()],
+  });
+}
+
+/** These users' linked accounts, without tokens, each with the last usage their dashboard read. */
+export async function listAccountsWithUsage(userIds: string[]): Promise<MemberAccount[]> {
+  await ensureSchema();
+  const res = await db().execute({
+    sql: `SELECT a.*, u.usage FROM linked_accounts a LEFT JOIN account_usage u ON u.account_id = a.id
+      WHERE a.user_id IN (${placeholders(userIds.length)}) ORDER BY a.position, a.added_at`,
+    args: userIds,
+  });
+  return res.rows.map((r) => {
+    const row = r as Row;
+    return { ...toPublic(row), userId: String(row.user_id), usage: row.usage ? (JSON.parse(String(row.usage)) as Usage) : null };
+  });
 }

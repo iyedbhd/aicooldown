@@ -6,6 +6,7 @@ import { accountsServerHost } from "@/lib/server/accounts-server";
 import { DATA_DIR } from "@/lib/server/data-dir";
 import type { Provider } from "@/lib/types";
 import { forget, liveState, saveCurrent, sayHello, sessionResetAt, switchTo, updateSavedCopy } from "./cli";
+import { deviceState } from "./device";
 
 /**
  * Scheduled hellos, kept in data/local-schedules.json and armed as timers in
@@ -152,8 +153,8 @@ export async function localState(): Promise<LocalState> {
   // The dashboard asks for this every 30 seconds: often enough to catch each token refresh by the CLI.
   queueCopyUpdate("claude");
   queueCopyUpdate("codex");
-  const [{ live, profiles }, store] = await Promise.all([liveState(), load()]);
-  return { live, profiles, schedules: store.schedules, runs: store.runs, accountsServer: accountsServerHost() };
+  const [{ live, profiles }, store, device] = await Promise.all([liveState(), load(), deviceState()]);
+  return { live, profiles, schedules: store.schedules, runs: store.runs, accountsServer: accountsServerHost(), device };
 }
 
 /** The route's actions, validated there. */

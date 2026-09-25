@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAccount, updatePlan, updateTokens } from "@/lib/server/accounts";
+import { getAccount, saveUsage, updatePlan, updateTokens } from "@/lib/server/accounts";
 import { forwardAccounts } from "@/lib/server/accounts-server";
 import { getSessionUser } from "@/lib/server/auth";
 import { lookupPlan, resolveUsage, type Secrets } from "@/lib/server/usage";
@@ -32,7 +32,10 @@ export async function POST(req: Request) {
         plan = await lookupPlan({ ...stored, ...tokens }).catch(() => undefined);
         if (plan) await updatePlan(user.id, stored.id, plan);
       }
-      return NextResponse.json({ ...usage, plan: plan ?? usage.plan });
+      const answer = { ...usage, plan: plan ?? usage.plan };
+      // The latest reading, for the owners and admins of this user's teams. Best effort.
+      if (!usage.stale) await saveUsage(stored.id, answer).catch(() => undefined);
+      return NextResponse.json(answer);
     } catch (err) {
       return errorResponse(err);
     }

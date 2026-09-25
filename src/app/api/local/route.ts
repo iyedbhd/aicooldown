@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import type { ScheduleMode } from "@/lib/local";
+import { connect, disconnect, setRemote, setShare, startAgent, stopRun } from "@/lib/server/local/device";
 import { localRequestAllowed } from "@/lib/server/local/gate";
 import { actions, localState, startScheduler } from "@/lib/server/local/schedule";
+import { REMOTE_LEVELS, type RemoteLevel } from "@/lib/team";
 import { errorResponse, isProvider, readBody, str } from "../_lib";
 
 export const runtime = "nodejs";
@@ -14,6 +16,7 @@ const notHere = () => NextResponse.json({ error: "Not available" }, { status: 40
 export async function GET(req: Request) {
   if (!localRequestAllowed(req)) return notHere();
   await startScheduler();
+  startAgent();
   return NextResponse.json(await localState());
 }
 
@@ -22,6 +25,7 @@ export async function POST(req: Request) {
   // A JSON content type forces a CORS preflight, which no other site gets past.
   if (!req.headers.get("content-type")?.startsWith("application/json")) return NextResponse.json({ error: "JSON required" }, { status: 415 });
   await startScheduler();
+  startAgent();
   const body = await readBody(req);
   const profileId = str(body, "profileId");
   try {
@@ -48,6 +52,23 @@ export async function POST(req: Request) {
         await actions.cancel(scheduleId);
         break;
       }
+      case "connect":
+        await connect(req);
+        break;
+      case "disconnect":
+        await disconnect(body.forget !== false);
+        break;
+      case "remote":
+        if (!REMOTE_LEVELS.includes(body.level as RemoteLevel)) return NextResponse.json({ error: "level is required" }, { status: 400 });
+        await setRemote(body.level as RemoteLevel);
+        break;
+      case "share":
+        if (typeof body.on !== "boolean") return NextResponse.json({ error: "on is required" }, { status: 400 });
+        await setShare(body.on);
+        break;
+      case "stop-run":
+        stopRun();
+        break;
       default:
         return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }

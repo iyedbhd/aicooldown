@@ -15,6 +15,7 @@
 <p align="center">
   <a href="https://aicooldown.com">Use it now</a> ·
   <a href="#desktop-app">Desktop app</a> ·
+  <a href="#teams">Teams</a> ·
   <a href="#run-it-yourself">Self-host</a> ·
   <a href="#how-it-treats-your-tokens">Security</a> ·
   <a href="https://github.com/iyedbhd/aicooldown/issues">Issues</a>
@@ -58,6 +59,8 @@ Both providers expose this information, but they hide it in different places and
 
 **Banked resets.** Both providers now hand out saved one-time resets that expire (Codex after 30 days). Each account shows how many it has banked and when the next one expires, so none lapse unused. Redeem them in the provider's own app.
 
+**Teams.** Invite the people you work with and see, per person, the computers they connected and which accounts their Claude Code and Codex CLIs use, every Claude Code and Codex session on those computers (live ones first, with their project, branch, models, tokens and API value), the projects they work on, and how close each of their accounts is to its limits. Read a session's conversation where its computer shares it. Start a Claude Code or Codex session on a teammate's computer from the browser, when that computer allows it, and watch it work. [More below](#teams).
+
 **The small things.** Browser notifications when a limit resets or runs out. A countdown in the tab title so a pinned tab is enough. One-click "copy status" for pasting into chat. Rename accounts to whatever makes sense to you. Light and dark themes.
 
 <p align="center">
@@ -91,6 +94,8 @@ This app needs your provider tokens to read your limits, so here is exactly what
 
 The server only ever calls the providers' own usage endpoints. It reads limits and your account email, nothing else: no conversations, no messages. Passwords are scrypt-hashed, sessions are an httpOnly cookie, and there is no third-party auth service.
 
+[Teams](#teams) add three things, all opt-in: a computer you connect sends its activity report (its sessions and project folders, git branches, models, times and token counts from the CLIs' session logs, not what the sessions say); a computer set to share session content also sends session titles, and a session's conversation when someone asks for it, which the server keeps encrypted like provider tokens for a week; and a remote session's prompt and output go through the server, which keeps them encrypted for 30 days.
+
 If you would rather not have your tokens pass through someone else's server at all, that is a reasonable position. Host your own copy. It is one click on Vercel and the code is all here to read.
 
 ## Desktop app
@@ -121,9 +126,44 @@ xattr -dr com.apple.quarantine "/Applications/AI Cooldown.app"
 - **Only your computer can reach it.** Inside, the app runs the dashboard's server on `127.0.0.1` alone, and its window shows only that dashboard: links to other sites open in your browser.
 - **Your AI Cooldown account works there too.** Signing in uses your account on aicooldown.com, so the accounts you synced on the website show up in the desktop app. The app passes sign-in, synced accounts and their usage on to aicooldown.com, with only its own session cookie. As a guest, everything stays on your computer and the app talks to Claude and OpenAI directly. Set `AICOOLDOWN_ACCOUNTS_SERVER` to the `https://` address of your own copy to use that instead, or to `local` to keep accounts in a database on your computer.
 - **Your data is in one folder:** `%LOCALAPPDATA%\AI Cooldown` on Windows, `~/Library/Application Support/AI Cooldown` on macOS, `~/.local/share/aicooldown` on Linux. `data` holds the saved CLI logins, schedules, the local database and its key; `window` holds the window's own storage: guest accounts, polling history and theme. Guest accounts you added in a browser tab with the single-file versions before 0.3 stayed in that browser, so add them again or sign in.
+- **It can join your team.** Signed in, **Connect this computer** under This machine puts it on the [Team](#teams) page with what its CLIs work on, and you decide there whether sessions can be started on it from the browser.
 - **Port 3477 taken?** Set `AICOOLDOWN_PORT`. The window's storage is kept per address, so stick to one port.
 
 `npm run desktop` builds the installer for the system you run it on into `dist/`, with Electron and electron-builder pinned in `desktop/package.json`. Pushing a `v*` tag that matches the version in `package.json` builds all four and publishes the release.
+
+## Teams
+
+Open **Team** in the header; it needs an AI Cooldown account. Everyone has a personal workspace, **Just me**, with their own computers, projects and sessions. **New team** starts a team with you as its owner.
+
+- **Invite people with a link.** Optionally bound to one email, it works once and for 7 days. You send it yourself: there is no email service. They sign in or register, see what joining shares, and accept.
+- **Roles.** The owner renames or deletes the team, changes roles and can hand the team to someone else. Admins invite and remove members. Owners and admins see every member's details; members see the roster and their own.
+- **What owners and admins see**: each member's connected computers (name, system, AI Cooldown version, online or when last seen, and whose accounts the Claude Code and Codex CLIs there are signed in with), every Claude Code and Codex session on them over the last 30 days, the projects worked on there with tokens per day and model and what those tokens would cost at Anthropic's and OpenAI's API list prices, the latest reading of each linked account's limits, and the remote sessions on their computers. What sessions say only from computers that share it; never provider tokens.
+- **Five views**: Overview (what is live now, totals, tokens per day, limits running out, busiest projects), People (each with their latest sessions), Computers, Projects and Sessions, over 7, 14 or 30 days.
+
+### Connect a computer
+
+In the desktop app, or any copy running on your computer, sign in and press **Connect this computer** under This machine. The computer gets a token of its own and checks in with the server that keeps your account every minute (every 15 seconds while it allows remote sessions or shares session content): what it is and which accounts its CLIs use, plus, when it changed, an activity report it reads every 2 minutes from the CLIs' session logs (`~/.claude/projects`, `~/.codex/sessions`): per project folder, with the home folder shown as `~`, the git branch, models, times and token counts, and each session with where it ran (terminal, IDE, desktop app, `codex exec`), when it started and was last active, its models, tokens and subagents. **Disconnect** stops it for good. Signing out there disconnects it until you sign in there again, and signing out other devices (or changing your password) disconnects every computer until then.
+
+### Sessions
+
+The Sessions tab lists every Claude Code and Codex session on the computers you may see, live ones first (a session is live while it wrote to its log in the last 5 minutes), filtered by person, computer, project, CLI or text. People, Computers and Projects link to theirs. A session shows its project, branch, computer, where it ran, when, how long, its tokens and API value per model, and the remote session that ran it, if one did.
+
+What sessions say stays on the computer unless its owner turns on **Share session content** there, under This machine, which only that computer decides (it is off by default and asks first). A sharing computer sends each session's title (its custom title or summary, or else its first prompt), and when someone who may see the computer asks for a session's conversation, it reads it from the CLI's log and sends it on its next check-in: prompts, replies, the commands run and what they printed, the latest 1,500 entries. The server keeps it encrypted for a week, and deletes every conversation from a computer as soon as it stops sharing.
+
+### Remote Claude Code and Codex sessions
+
+What sessions started from the browser may do on a computer is set on that computer, under This machine, and nowhere else: the server cannot change it, and the computer checks every session against it.
+
+| Setting | Claude Code runs with | Codex runs with | Sessions can |
+| --- | --- | --- | --- |
+| Off (the default) | | | not start |
+| Read only | `--permission-mode plan` | `--sandbox read-only` | read the project and answer or plan |
+| Edit files | `--permission-mode acceptEdits` | `--sandbox workspace-write` | also edit files in the project (Codex also runs commands in its sandbox, without network) |
+| Full access | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | also run any command, without asking |
+
+Where it is allowed, the computer's owner and the owners and admins of their teams start a session from the Team page: the computer, Claude Code or Codex, one of the projects it reported, what the session may do, the model, and the prompt. The computer picks it up within seconds, runs `claude -p` or `codex exec` in that project as the account that CLI is signed in with (the prompt goes in on standard input, never on a command line) and streams the output back. Cancel it while it runs, or continue the conversation when it is done. On the computer, This machine lists the sessions it ran, a notification says when someone else starts one, **Stop** ends it, and lowering the setting ends a session that asked for more. Only projects the computer reported can be targeted, only conversations started this way can be continued, and a session stops after 30 minutes.
+
+Deploy the website before handing out a desktop build with these features: the desktop app's team pages and check-ins go to aicooldown.com (or your `AICOOLDOWN_ACCOUNTS_SERVER`).
 
 ## Run it yourself
 
@@ -134,7 +174,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000. Guest mode works with zero configuration. Sign-up works too: it creates a SQLite file at `data/aicooldown.db` and uses a development encryption key with a console warning.
+Open http://localhost:3000. Guest mode works with zero configuration. `npm run dev` uses the database your `.env.local` names, if it names one: a `.env.local` pulled from Vercel points at your production database. Sign-up works too: it creates a SQLite file at `data/aicooldown.db` and uses a development encryption key with a console warning.
 
 ### This machine: switch CLI logins and start the 5-hour clock early
 
@@ -179,10 +219,18 @@ src/app/api/usage            usage for a stored account (by id) or a guest accou
 src/app/api/accounts         signed-in CRUD for linked accounts
 src/app/api/auth/*           register, login, logout, me, PKCE code exchange
 src/app/api/identity         account email / plan for a guest token
+src/app/api/teams, invites   teams, roles, invite links, and everything the team page shows
+src/app/api/devices, agent   connecting a computer; the API it checks in with, by its own token
+src/app/api/runs             remote sessions: start, follow, cancel
+src/app/api/sessions         a session's conversation: ask its computer for it, then read it
 src/lib/providers/*.ts       per-provider endpoints and response normalization
 src/lib/server/usage.ts      fetch + refresh-on-expiry + cache, shared by both callers
 src/lib/server/{db,auth,accounts,crypto}.ts
                              libSQL schema, sessions, encrypted account storage
+src/lib/server/{teams,devices,runs,transcripts,workspace}.ts
+                             who may see and do what, connected computers, remote sessions, conversations
+src/lib/server/local/{device,activity,transcript,runner}.ts
+                             on the computer: checking in, reading the CLIs' session logs, running sessions
 src/lib/store.ts             browser-side account store: localStorage or the API
 src/components/*             dashboard UI
 desktop/                     the desktop app: its Electron main process, build script and installer smoke test
