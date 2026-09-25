@@ -6,6 +6,7 @@ import { DATA_DIR } from "./data-dir";
  * One libSQL connection for the process. Locally this is a SQLite file in the
  * data directory; in production point LIBSQL_URL (and LIBSQL_AUTH_TOKEN) at
  * Turso or any libSQL server, since serverless filesystems do not persist.
+ * `next dev` keeps to the file (see connection()).
  */
 let client: Client | null = null;
 let schemaReady: Promise<void> | null = null;
@@ -126,16 +127,35 @@ CREATE TABLE IF NOT EXISTS session_transcripts (
  */
 const MIGRATIONS = ["ALTER TABLE runs ADD COLUMN tool TEXT NOT NULL DEFAULT 'claude'"];
 
-export function db(): Client {
-  if (!client) {
-    // TURSO_* are what Vercel's Turso integration injects; LIBSQL_* for any other libSQL server.
-    client = createClient({
-      // libSQL percent-decodes file: URLs and stops at ? and #, so those are escaped in the path.
-      // The ignore comment keeps a database file lying in ./data out of the build's traces.
-      url: process.env.LIBSQL_URL ?? process.env.TURSO_DATABASE_URL ?? `file:${path.join(/* turbopackIgnore: true */ DATA_DIR, "aicooldown.db").replace(/[%?#]/g, encodeURIComponent)}`,
-      authToken: process.env.LIBSQL_AUTH_TOKEN ?? process.env.TURSO_AUTH_TOKEN,
-    });
+/**
+ * Where the data lives: the libSQL server in the environment (TURSO_* are what
+ * Vercel's Turso integration injects, LIBSQL_* any other), or else a file in
+ * the data directory. A development server stays on the file even when the
+ * environment names a server, which in a .env.local is usually production:
+ * trying things out would read and write real accounts. AICOOLDOWN_REMOTE_DB=1
+ * lets it, on purpose.
+ */
+function choose(): { url: string; authToken?: string } {
+  // libSQL percent-decodes file: URLs and stops at ? and #, so those are escaped in the path.
+  // The ignore comment keeps a database file lying in ./data out of the build's traces.
+  const file = `file:${path.join(/* turbopackIgnore: true */ DATA_DIR, "aicooldown.db").replace(/[%?#]/g, encodeURIComponent)}`;
+  const url = process.env.LIBSQL_URL || process.env.TURSO_DATABASE_URL;
+  if (!url) return { url: file };
+  if (process.env.NODE_ENV === "development" && !url.startsWith("file:") && process.env.AICOOLDOWN_REMOTE_DB !== "1") {
+    console.warn(`[db] A development server uses ${file}, not the database server in the environment. Set AICOOLDOWN_REMOTE_DB=1 to use that one.`);
+    return { url: file };
   }
+  return { url, authToken: process.env.LIBSQL_AUTH_TOKEN || process.env.TURSO_AUTH_TOKEN || undefined };
+}
+
+let chosen: ReturnType<typeof choose> | null = null;
+const connection = () => (chosen ??= choose());
+
+/** Whether the data lives on a database server rather than in a file on this computer. */
+export const remoteDatabase = () => !connection().url.startsWith("file:");
+
+export function db(): Client {
+  client ??= createClient(connection());
   return client;
 }
 

@@ -1,6 +1,6 @@
 import { db, ensureSchema } from "./db";
 import { readCookie, SESSION_COOKIE } from "./cookies";
-import { hashPassword, newId, randomToken, sha256, verifyPassword } from "./crypto";
+import { hashPassword, newId, outdatedHash, randomToken, sha256, verifyPassword } from "./crypto";
 import { RequestError } from "./request-error";
 import { leaveAllTeamsStatements } from "./teams";
 
@@ -23,7 +23,7 @@ export async function register(email: string, password: string): Promise<User> {
   const id = newId();
   await db().execute({
     sql: "INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
-    args: [id, email, hashPassword(password), Date.now()],
+    args: [id, email, await hashPassword(password), Date.now()],
   });
   return { id, email };
 }
@@ -33,13 +33,16 @@ export async function login(email: string, password: string): Promise<User> {
   const res = await db().execute({ sql: "SELECT id, email, password_hash FROM users WHERE email = ?", args: [email] });
   const row = res.rows[0];
   // Verify against a dummy hash when the user is unknown so timing does not reveal existence.
-  const hash = row ? String(row.password_hash) : DUMMY_HASH;
-  const ok = verifyPassword(password, hash);
+  const hash = row ? String(row.password_hash) : await dummyHash();
+  const ok = await verifyPassword(password, hash);
   if (!row || !ok) throw new RequestError(401, "Wrong email or password.");
+  // Hashed with weaker settings than today's: hash it again while the password is at hand.
+  if (outdatedHash(hash)) await db().execute({ sql: "UPDATE users SET password_hash = ? WHERE id = ?", args: [await hashPassword(password), String(row.id)] });
   return { id: String(row.id), email: String(row.email) };
 }
 
-const DUMMY_HASH = hashPassword("dummy-password-for-timing");
+let dummy: Promise<string> | null = null;
+const dummyHash = () => (dummy ??= hashPassword("dummy-password-for-timing"));
 
 export async function createSession(userId: string): Promise<string> {
   const token = randomToken(32);
@@ -84,7 +87,7 @@ function validatePassword(password: unknown): string {
 async function checkPassword(userId: string, password: unknown): Promise<void> {
   const res = await db().execute({ sql: "SELECT password_hash FROM users WHERE id = ?", args: [userId] });
   const row = res.rows[0];
-  if (!row || typeof password !== "string" || !verifyPassword(password, String(row.password_hash))) throw new RequestError(401, "Wrong password.");
+  if (!row || typeof password !== "string" || !(await verifyPassword(password, String(row.password_hash)))) throw new RequestError(401, "Wrong password.");
 }
 
 /**
@@ -100,9 +103,10 @@ export async function changePassword(req: Request, user: User, currentPassword: 
   await checkPassword(user.id, currentPassword);
   if (currentPassword === next) throw new RequestError(400, "That is already your password.");
   const keep = readCookie(req);
+  const hash = await hashPassword(next);
   await db().batch(
     [
-      { sql: "UPDATE users SET password_hash = ? WHERE id = ?", args: [hashPassword(next), user.id] },
+      { sql: "UPDATE users SET password_hash = ? WHERE id = ?", args: [hash, user.id] },
       { sql: "DELETE FROM sessions WHERE user_id = ? AND id_hash != ?", args: [user.id, keep ? sha256(keep) : ""] },
       disconnectComputers(user.id),
     ],
@@ -166,19 +170,24 @@ export function sameOrigin(req: Request): boolean {
   }
 }
 
-/* Best-effort per-IP throttle for credential endpoints (per server instance). */
+/*
+ * Best-effort per-IP throttle (per server instance): `limit` requests per
+ * 15 minutes in each bucket. Credentials get few; the provider endpoints
+ * anyone may call get enough for a dashboard polling a handful of accounts.
+ */
 const attempts = new Map<string, { count: number; resetAt: number }>();
-const LIMIT = 20;
 const WINDOW_MS = 15 * 60_000;
 
-export function throttle(req: Request): boolean {
+export function throttle(req: Request, bucket = "credentials", limit = 20): boolean {
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || req.headers.get("x-real-ip") || "local";
   const now = Date.now();
-  const entry = attempts.get(ip);
+  if (attempts.size > 10_000) for (const [k, v] of attempts) if (v.resetAt < now) attempts.delete(k);
+  const key = `${bucket} ${ip}`;
+  const entry = attempts.get(key);
   if (!entry || entry.resetAt < now) {
-    attempts.set(ip, { count: 1, resetAt: now + WINDOW_MS });
+    attempts.set(key, { count: 1, resetAt: now + WINDOW_MS });
     return true;
   }
   entry.count += 1;
-  return entry.count <= LIMIT;
+  return entry.count <= limit;
 }

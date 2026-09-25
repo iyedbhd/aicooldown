@@ -2,29 +2,33 @@ import type { InStatement } from "@libsql/client";
 import type { Tool } from "../activity";
 import { levelAllows, MAX_PROMPT, MODEL_NAME, REMOTE_LABEL, SESSION_ID, type RemoteLevel, type Run, type RunEvent, type RunEventKind, type RunJob, type RunResult, type RunStatus } from "../team";
 import type { User } from "./auth";
-import { decrypt, encrypt, newId } from "./crypto";
+import { decrypt, encrypt, newId, openJson, sealJson } from "./crypto";
 import { db, ensureSchema, placeholders } from "./db";
 import { deviceById, isOnline } from "./devices";
 import { RequestError } from "./request-error";
-import { adminOver } from "./teams";
+import { adminOver, seesRun } from "./teams";
 
 /*
- * Remote sessions: a prompt for Claude Code, queued here for one computer,
- * which picks it up when it next checks in, runs it in the project and sends
- * the output back as it comes. Who may start one: the computer's owner, and
- * the owners and admins of their teams. What it may do: whatever the computer
- * allows, which it enforces itself too. Prompts and output are encrypted at
- * rest like provider tokens.
+ * Remote sessions: a prompt for Claude Code or Codex, queued here for one
+ * computer, which picks it up when it next checks in, runs it in the project
+ * and sends the output back as it comes. Who may start one: the computer's
+ * owner, and the owners and admins of their teams. Who sees it: the
+ * computer's owner, and the owners and admins of a team that both the owner
+ * and whoever started it are in. What it may do: whatever the computer
+ * allows, which it enforces itself too. Prompts, output and results are
+ * encrypted at rest like provider tokens.
  */
 
 /** A session no computer picked up in this long fails: nobody expects it to start hours later. */
 const QUEUE_TTL_MS = 10 * 60_000;
 /** A running session whose computer has not checked in for this long is given up. */
 const LOST_MS = 10 * 60_000;
-/** How long sessions and their output are kept. */
-const KEEP_MS = 30 * 86400_000;
-const MAX_EVENTS = 2_000;
+const MAX_EVENTS = 1_000;
 const MAX_EVENT_TEXT = 4_000;
+/** Sessions waiting or running on one computer at a time: it runs one, the rest queue. */
+const MAX_PENDING = 3;
+/** Sessions one person may start in a day. */
+const MAX_PER_DAY = 100;
 const EVENT_KINDS: RunEventKind[] = ["text", "tool", "output", "error", "info", "result"];
 const FINISHED: RunStatus[] = ["done", "failed", "cancelled"];
 
@@ -40,7 +44,7 @@ function toRun(r: Row): Run {
     id: String(r.id),
     tool: String(r.tool) as Tool,
     deviceId: String(r.device_id),
-    deviceName: String((JSON.parse(String(r.device_info)) as { name?: string }).name ?? "computer"),
+    deviceName: String(openJson<{ name?: string }>(String(r.device_info)).name ?? "computer"),
     by: r.by_email === null ? null : String(r.by_email),
     project: String(r.project),
     prompt: decrypt(String(r.prompt)),
@@ -49,14 +53,14 @@ function toRun(r: Row): Run {
     resume: r.resume_session === null ? null : String(r.resume_session),
     status: String(r.status) as RunStatus,
     sessionId: r.session_id === null ? null : String(r.session_id),
-    result: r.result === null ? null : (JSON.parse(String(r.result)) as RunResult),
+    result: r.result === null ? null : openJson<RunResult>(String(r.result)),
     createdAt: Number(r.created_at),
     startedAt: opt(r.started_at),
     finishedAt: opt(r.finished_at),
   };
 }
 
-const failed = (error: string) => JSON.stringify({ error } satisfies RunResult);
+const failed = (error: string) => sealJson({ error } satisfies RunResult);
 
 /** Fails what can no longer happen on these computers: queued too long, or running on one that went quiet. */
 async function settleStale(deviceIds: string[]): Promise<void> {
@@ -79,20 +83,31 @@ async function settleStale(deviceIds: string[]): Promise<void> {
   );
 }
 
-/** The latest sessions on these computers. */
-export async function listRuns(deviceIds: string[], limit = 60): Promise<Run[]> {
+/**
+ * The latest sessions on these computers that the viewer sees from `teamId`,
+ * the team they are looking at (null for their own workspace): every one on
+ * their own computers, and on the others' those started by someone in the team.
+ */
+export async function listRuns(deviceIds: string[], viewerId: string, teamId: string | null, limit = 60): Promise<Run[]> {
   await ensureSchema();
   await settleStale(deviceIds);
-  const res = await db().execute({ sql: `${SELECT} WHERE r.device_id IN (${placeholders(deviceIds.length)}) ORDER BY r.created_at DESC LIMIT ?`, args: [...deviceIds, limit] });
+  const res = await db().execute({
+    sql: `${SELECT} WHERE r.device_id IN (${placeholders(deviceIds.length)})
+      AND (d.user_id = ? OR r.created_by IN (SELECT user_id FROM team_members WHERE team_id = ?))
+      ORDER BY r.created_at DESC LIMIT ?`,
+    args: [...deviceIds, viewerId, teamId, limit],
+  });
   return res.rows.map((r) => toRun(r as Row));
 }
 
-/** The run, if the viewer may see it: it ran on their computer, or on a computer of someone in a team they manage. */
+const sees = (viewer: User, row: Row) => seesRun(viewer.id, String(row.device_user), row.created_by === null ? null : String(row.created_by));
+
+/** The run, if the viewer may see it (see seesRun). */
 async function visibleRun(viewer: User, id: string): Promise<Row> {
   await ensureSchema();
   const res = await db().execute({ sql: `${SELECT} WHERE r.id = ?`, args: [id] });
   const row = res.rows[0] as Row | undefined;
-  if (!row || !(await adminOver(viewer.id, String(row.device_user)))) throw new RequestError(404, "Session not found.");
+  if (!row || !(await sees(viewer, row))) throw new RequestError(404, "Session not found.");
   return row;
 }
 
@@ -113,10 +128,12 @@ export async function createRun(viewer: User, raw: Record<string, unknown>): Pro
   if (!device.activity?.projects.some((p) => p.path === project)) throw new RequestError(400, `Pick one of the projects ${name} reported.`);
   let resume: string | null = null;
   if (raw.resume) {
-    // Only a conversation a remote session started: never one of the owner's own sessions on that computer.
+    // Only a conversation a remote session started, never one of the owner's own sessions on that computer,
+    // and one the viewer sees: a conversation started from another team stays that team's.
     const own = typeof raw.resume === "string" && SESSION_ID.test(raw.resume) ? raw.resume : null;
-    const found = own && (await db().execute({ sql: "SELECT 1 FROM runs WHERE device_id = ? AND project = ? AND tool = ? AND session_id = ?", args: [device.id, project, tool, own] }));
-    if (!found || found.rows.length === 0) throw new RequestError(400, "Only a session started from here can be continued.");
+    const found = own && (await db().execute({ sql: `${SELECT} WHERE r.device_id = ? AND r.project = ? AND r.tool = ? AND r.session_id = ? ORDER BY r.created_at DESC LIMIT 1`, args: [device.id, project, tool, own] }));
+    const started = found ? (found.rows[0] as Row | undefined) : undefined;
+    if (!started || !(await sees(viewer, started))) throw new RequestError(400, "Only a session started from here can be continued.");
     resume = own;
   }
   if (!isOnline(device)) throw new RequestError(409, `${name} is offline. A session starts on a computer that is on, with AI Cooldown running.`);
@@ -130,19 +147,19 @@ export async function createRun(viewer: User, raw: Record<string, unknown>): Pro
   }
 
   const now = Date.now();
+  const counts = await db().execute({
+    sql: `SELECT (SELECT COUNT(*) FROM runs WHERE device_id = ? AND status IN ('queued', 'running')) AS pending,
+      (SELECT COUNT(*) FROM runs WHERE created_by = ? AND created_at > ?) AS today`,
+    args: [device.id, viewer.id, now - 86400_000],
+  });
+  if (Number(counts.rows[0].pending) >= MAX_PENDING) throw new RequestError(429, `${MAX_PENDING} sessions are already waiting on ${name}. Start this one when one of them is done.`);
+  if (Number(counts.rows[0].today) >= MAX_PER_DAY) throw new RequestError(429, `That is ${MAX_PER_DAY} sessions started in the last day, the most there can be. Try again later.`);
   const id = newId();
-  await db().batch(
-    [
-      { sql: "DELETE FROM run_events WHERE run_id IN (SELECT id FROM runs WHERE device_id = ? AND created_at < ?)", args: [device.id, now - KEEP_MS] },
-      { sql: "DELETE FROM runs WHERE device_id = ? AND created_at < ?", args: [device.id, now - KEEP_MS] },
-      {
-        sql: `INSERT INTO runs (id, device_id, tool, created_by, project, prompt, mode, model, resume_session, status, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
-        args: [id, device.id, tool, viewer.id, project, encrypt(prompt), mode, model, resume, now],
-      },
-    ],
-    "write",
-  );
+  await db().execute({
+    sql: `INSERT INTO runs (id, device_id, tool, created_by, project, prompt, mode, model, resume_session, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+    args: [id, device.id, tool, viewer.id, project, encrypt(prompt), mode, model, resume, now],
+  });
   return { id, tool, deviceId: device.id, deviceName: name, by: viewer.email, project, prompt, mode, model, resume, status: "queued", sessionId: null, result: null, createdAt: now, startedAt: null, finishedAt: null };
 }
 
@@ -250,7 +267,7 @@ export async function reportRun(deviceId: string, runId: string, body: Record<st
     statements.push({ sql: "UPDATE runs SET session_id = ? WHERE id = ?", args: [body.sessionId, runId] });
   }
   if (FINISHED.includes(body.status as RunStatus)) {
-    statements.push({ sql: "UPDATE runs SET status = ?, finished_at = ?, result = ? WHERE id = ?", args: [String(body.status), Date.now(), JSON.stringify(parseResult(body.result)), runId] });
+    statements.push({ sql: "UPDATE runs SET status = ?, finished_at = ?, result = ? WHERE id = ?", args: [String(body.status), Date.now(), sealJson(parseResult(body.result)), runId] });
   }
   if (statements.length) await db().batch(statements, "write");
   return { cancel: Number(run.cancel_requested) === 1 };

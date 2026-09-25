@@ -4,7 +4,8 @@ import { connect, disconnect, setRemote, setShare, startAgent, stopRun } from "@
 import { localRequestAllowed } from "@/lib/server/local/gate";
 import { actions, localState, startScheduler } from "@/lib/server/local/schedule";
 import { REMOTE_LEVELS, type RemoteLevel } from "@/lib/team";
-import { errorResponse, isProvider, readBody, str } from "../_lib";
+import { ProviderError } from "@/lib/types";
+import { isProvider, readBody, str } from "../_lib";
 
 export const runtime = "nodejs";
 
@@ -12,6 +13,11 @@ const MODES: ScheduleMode[] = ["at", "reset", "every-reset"];
 
 /** 404 everywhere but a copy running on the user's own machine, so the panel never shows on the hosted site. */
 const notHere = () => NextResponse.json({ error: "Not available" }, { status: 404 });
+
+/** What went wrong, as it is: only this computer's own user sees it. */
+function localError(err: unknown): NextResponse {
+  return NextResponse.json({ error: err instanceof Error ? err.message : "Unexpected error" }, { status: err instanceof ProviderError ? err.status : 502 });
+}
 
 export async function GET(req: Request) {
   if (!localRequestAllowed(req)) return notHere();
@@ -74,6 +80,6 @@ export async function POST(req: Request) {
     }
     return NextResponse.json(await localState());
   } catch (err) {
-    return errorResponse(err);
+    return localError(err);
   }
 }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { deviceFromRequest, parseActivity, parseInfo, recordSync, unlinkDevice } from "@/lib/server/devices";
+import { purgeExpired } from "@/lib/server/retention";
 import { claimRun, interruptRuns } from "@/lib/server/runs";
 import { dropTranscripts, transcriptRequests } from "@/lib/server/transcripts";
 import { readBody } from "../_lib";
@@ -23,6 +24,7 @@ export async function POST(req: Request) {
   try {
     const device = await deviceFromRequest(req);
     if (!device) return notConnected();
+    await purgeExpired();
     const body = await readBody(req);
     const info = parseInfo(body.info);
     // A report that does not parse keeps the last good one.

@@ -50,6 +50,25 @@ export async function adminOver(viewerId: string, userId: string): Promise<boole
   return res.rows.length > 0;
 }
 
+/**
+ * Whether `viewerId` may see a remote session that `creatorId` started on
+ * `ownerId`'s computer: on their own computer, or as an owner or admin of a
+ * team both the computer's owner and whoever started it are in. A session
+ * started from one team stays out of the sight of another team the computer's
+ * owner is also in.
+ */
+export async function seesRun(viewerId: string, ownerId: string, creatorId: string | null): Promise<boolean> {
+  if (viewerId === ownerId) return true;
+  if (!creatorId) return false;
+  await ensureSchema();
+  const res = await db().execute({
+    sql: `SELECT 1 FROM team_members v JOIN team_members o ON o.team_id = v.team_id JOIN team_members c ON c.team_id = v.team_id
+      WHERE v.user_id = ? AND v.role IN ('owner', 'admin') AND o.user_id = ? AND c.user_id = ? LIMIT 1`,
+    args: [viewerId, ownerId, creatorId],
+  });
+  return res.rows.length > 0;
+}
+
 export async function listTeams(userId: string): Promise<TeamSummary[]> {
   await ensureSchema();
   const res = await db().execute({
@@ -98,7 +117,18 @@ export async function setRole(actorId: string, teamId: string, targetId: string,
   if (targetId === actorId) throw new RequestError(400, "You are the owner. Make someone else the owner to step down.");
   if (!(await roleIn(teamId, targetId))) throw new RequestError(404, "They are not in this team.");
   const update = (userId: string, r: Role): InStatement => ({ sql: "UPDATE team_members SET role = ? WHERE team_id = ? AND user_id = ?", args: [r, teamId, userId] });
-  await db().batch(role === "owner" ? [update(targetId, "owner"), update(actorId, "admin")] : [update(targetId, role)], "write");
+  await db().batch(
+    role === "owner"
+      ? [update(targetId, "owner"), update(actorId, "admin"), ...invitesBeyond(teamId, actorId, "admin")]
+      : [update(targetId, role), ...invitesBeyond(teamId, targetId, role)],
+    "write",
+  );
+}
+
+/** The invites someone made that their role in the team no longer lets them give out: admins invite members, members nobody. */
+function invitesBeyond(teamId: string, userId: string, role: Role): InStatement[] {
+  if (role === "owner") return [];
+  return [{ sql: `DELETE FROM team_invites WHERE team_id = ? AND created_by = ?${role === "admin" ? " AND role = 'admin'" : ""}`, args: [teamId, userId] }];
 }
 
 /** Removes someone, or leaves when it is yourself. Admins remove members; the owner removes anyone but hands the team over before leaving. */
@@ -113,7 +143,10 @@ export async function removeMember(actorId: string, teamId: string, targetId: st
       throw new RequestError(403, actorRole === "member" ? "Only owners and admins remove people." : "Only the owner can remove an admin, and nobody can remove the owner.");
     }
   }
-  await db().execute({ sql: "DELETE FROM team_members WHERE team_id = ? AND user_id = ?", args: [teamId, targetId] });
+  await db().batch(
+    [{ sql: "DELETE FROM team_members WHERE team_id = ? AND user_id = ?", args: [teamId, targetId] }, ...invitesBeyond(teamId, targetId, "member")],
+    "write",
+  );
 }
 
 /**
@@ -144,8 +177,9 @@ export async function leaveAllTeamsStatements(userId: string): Promise<InStateme
 
 /**
  * An invite link, single use, valid for a week. With an email, only the
- * account with that email can accept it. The link holds the only copy of its
- * token; the server keeps its hash.
+ * account with that email can accept it (AI Cooldown does not verify emails,
+ * so the link is what has to stay private). The link holds the only copy of
+ * its token; the server keeps its hash.
  */
 export async function createInvite(actorId: string, teamId: string, email: unknown, role: unknown, origin: string): Promise<{ invite: Invite; url: string }> {
   const actorRole = await requireRole(teamId, actorId, ["owner", "admin"], "invite people");
@@ -217,18 +251,34 @@ export async function previewInvite(token: string): Promise<InvitePreview> {
   return { team, role, email, by, expiresAt };
 }
 
-/** Joins the team the invite is for, and uses the invite up. Returns the team's id. */
+/**
+ * Joins the team the invite is for, and uses the invite up. Returns the team's
+ * id. Whoever made the invite must still be allowed to give it out: someone
+ * removed from the team, or no longer an admin, cannot let anyone in with
+ * links made before.
+ */
 export async function acceptInvite(user: User, token: string): Promise<string> {
   const invite = await findInvite(token);
   if (invite.email && invite.email !== user.email) throw new RequestError(403, `This invite is for ${invite.email}. Sign in with that account to accept it.`);
   const teamId = String(invite.team_id);
-  const already = await roleIn(teamId, user.id);
-  await db().batch(
+  const id = String(invite.id);
+  const giver = await roleIn(teamId, String(invite.created_by));
+  if (giver !== "owner" && !(giver === "admin" && invite.role === "member")) {
+    await db().execute({ sql: "DELETE FROM team_invites WHERE id = ?", args: [id] });
+    throw new RequestError(404, "This invite link does not work any more: whoever made it can no longer invite people.");
+  }
+  // One transaction: joining only while the invite still exists, then using it up. Of two people accepting at once, one gets in.
+  const [, used] = await db().batch(
     [
-      ...(already ? [] : [{ sql: "INSERT INTO team_members (team_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)", args: [teamId, user.id, invite.role, Date.now()] }]),
-      { sql: "DELETE FROM team_invites WHERE id = ?", args: [String(invite.id)] },
+      {
+        sql: `INSERT INTO team_members (team_id, user_id, role, joined_at) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM team_invites WHERE id = ?)
+          ON CONFLICT (team_id, user_id) DO NOTHING`,
+        args: [teamId, user.id, invite.role, Date.now(), id],
+      },
+      { sql: "DELETE FROM team_invites WHERE id = ?", args: [id] },
     ],
     "write",
   );
+  if (used.rowsAffected === 0) throw new RequestError(404, "This invite link does not work. It may have been used already or revoked.");
   return teamId;
 }

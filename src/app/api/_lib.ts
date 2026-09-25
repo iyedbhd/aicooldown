@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { throttle } from "@/lib/server/auth";
 import { ProviderError, type Provider } from "@/lib/types";
 
 export function isProvider(value: unknown): value is Provider {
@@ -27,8 +28,17 @@ export function publicOrigin(req: Request): string {
   return `${proto}://${host}`;
 }
 
+/**
+ * The provider endpoints anyone may call, without an account, are throttled
+ * per IP: enough for a dashboard polling a handful of accounts, not for
+ * trying tokens in bulk through this server.
+ */
+export const providerThrottled = (req: Request) =>
+  throttle(req, "providers", 600) ? null : NextResponse.json({ error: "Too many requests from here. Try again in a few minutes." }, { status: 429 });
+
+/** A provider's refusal as its status and message; anything else as a 502 that keeps the server's insides to its log. */
 export function errorResponse(err: unknown): NextResponse {
   if (err instanceof ProviderError) return NextResponse.json({ error: err.message }, { status: err.status });
-  const message = err instanceof Error ? err.message : "Unexpected error";
-  return NextResponse.json({ error: message }, { status: 502 });
+  console.error("[api]", err);
+  return NextResponse.json({ error: "Could not get an answer from the provider. Try again in a moment." }, { status: 502 });
 }

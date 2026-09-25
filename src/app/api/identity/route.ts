@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { fetchClaudeIdentity } from "@/lib/providers/claude";
 import { codexIdentityFromTokens } from "@/lib/providers/codex";
-import { errorResponse, isProvider, readBody, str } from "../_lib";
+import { errorResponse, isProvider, providerThrottled, readBody, str } from "../_lib";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
+  const throttled = providerThrottled(req);
+  if (throttled) return throttled;
   const body = await readBody(req);
   const provider = body.provider;
   const accessToken = str(body, "accessToken");

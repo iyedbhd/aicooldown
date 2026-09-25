@@ -1,8 +1,10 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
+import { remoteDatabase } from "./db";
 
 /*
- * Passwords: scrypt with a per-user salt. Provider tokens: AES-256-GCM under a
- * key derived from APP_SECRET, so a database dump alone does not expose them.
+ * Passwords: scrypt with a per-user salt. Provider tokens, and whatever else a
+ * database dump should not show: AES-256-GCM under a key derived from
+ * APP_SECRET, so a copy of the database alone does not expose them.
  */
 
 const DEV_SECRET = "dev-only-secret-change-me";
@@ -11,7 +13,8 @@ let warned = false;
 function secret(): string {
   const s = process.env.APP_SECRET;
   if (s && s.length >= 16) return s;
-  if (process.env.NODE_ENV === "production") {
+  // The development key is in this file for all to read: fine for a database on this computer, never for a server's.
+  if (process.env.NODE_ENV === "production" || remoteDatabase()) {
     throw new Error("APP_SECRET is not set. Set a long random string (32+ characters) in the environment.");
   }
   if (!warned) {
@@ -37,20 +40,40 @@ export function newId(): string {
   return randomToken(12);
 }
 
-const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
+/** One of OWASP's scrypt settings: 16 MiB, parallelism 5. */
+const SCRYPT = { N: 16384, r: 8, p: 5 };
+const KEYLEN = 64;
 
-export function hashPassword(password: string): string {
+const derive = (password: string, salt: Buffer, keylen: number, options: ScryptOptions) =>
+  new Promise<Buffer>((resolve, reject) => scrypt(password, salt, keylen, options, (err, key) => (err ? reject(err) : resolve(key))));
+
+/** `scrypt$N$r$p$salt$hash`. Hashing runs off the main thread, so a sign-in does not hold up other requests. */
+export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
-  const hash = scryptSync(password, salt, SCRYPT.keylen, SCRYPT);
-  return `scrypt$${SCRYPT.N}$${salt.toString("base64")}$${hash.toString("base64")}`;
+  const hash = await derive(password, salt, KEYLEN, SCRYPT);
+  return `scrypt$${SCRYPT.N}$${SCRYPT.r}$${SCRYPT.p}$${salt.toString("base64")}$${hash.toString("base64")}`;
 }
 
-export function verifyPassword(password: string, stored: string): boolean {
-  const [scheme, n, saltB64, hashB64] = stored.split("$");
-  if (scheme !== "scrypt" || !n || !saltB64 || !hashB64) return false;
-  const expected = Buffer.from(hashB64, "base64");
-  const actual = scryptSync(password, Buffer.from(saltB64, "base64"), expected.length, { ...SCRYPT, N: Number(n) });
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
+/** The settings a stored hash was made with; hashes from before carry only N (with r 8 and p 1). */
+function settings(stored: string): { options: ScryptOptions; salt: Buffer; hash: Buffer } | null {
+  const parts = stored.split("$");
+  if (parts[0] !== "scrypt") return null;
+  const [n, r, p, salt, hash] = parts.length === 6 ? parts.slice(1) : parts.length === 4 ? [parts[1], "8", "1", parts[2], parts[3]] : [];
+  if (!salt || !hash) return null;
+  return { options: { N: Number(n), r: Number(r), p: Number(p) }, salt: Buffer.from(salt, "base64"), hash: Buffer.from(hash, "base64") };
+}
+
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const s = settings(stored);
+  if (!s) return false;
+  const actual = await derive(password, s.salt, s.hash.length, s.options);
+  return actual.length === s.hash.length && timingSafeEqual(actual, s.hash);
+}
+
+/** Whether a hash was made with weaker settings than today's, to hash the password again at its next sign-in. */
+export function outdatedHash(stored: string): boolean {
+  const s = settings(stored);
+  return !s || s.options.N !== SCRYPT.N || s.options.r !== SCRYPT.r || s.options.p !== SCRYPT.p;
 }
 
 export function encrypt(plain: string): string {
@@ -70,3 +93,9 @@ export function decrypt(payload: string): string {
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
 }
+
+/** A value kept as encrypted JSON. */
+export const sealJson = (value: unknown) => encrypt(JSON.stringify(value));
+
+/** A value kept by sealJson, or as plain JSON by a version from before it. */
+export const openJson = <T>(stored: string): T => JSON.parse(stored.startsWith("v1:") ? decrypt(stored) : stored) as T;

@@ -1,6 +1,6 @@
 import type { MemberAccount } from "../team";
 import type { Account, Provider, TokenSet, Usage } from "../types";
-import { decrypt, encrypt, newId } from "./crypto";
+import { decrypt, encrypt, newId, openJson, sealJson } from "./crypto";
 import { db, ensureSchema, placeholders } from "./db";
 
 /** What the browser sees for a stored account: everything except the tokens. */
@@ -110,7 +110,7 @@ export async function saveUsage(id: string, usage: Usage): Promise<void> {
   await ensureSchema();
   await db().execute({
     sql: "INSERT INTO account_usage (account_id, usage, fetched_at) VALUES (?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET usage = excluded.usage, fetched_at = excluded.fetched_at",
-    args: [id, JSON.stringify(usage), Date.parse(usage.fetchedAt) || Date.now()],
+    args: [id, sealJson(usage), Date.parse(usage.fetchedAt) || Date.now()],
   });
 }
 
@@ -124,6 +124,6 @@ export async function listAccountsWithUsage(userIds: string[]): Promise<MemberAc
   });
   return res.rows.map((r) => {
     const row = r as Row;
-    return { ...toPublic(row), userId: String(row.user_id), usage: row.usage ? (JSON.parse(String(row.usage)) as Usage) : null };
+    return { ...toPublic(row), userId: String(row.user_id), usage: row.usage ? openJson<Usage>(String(row.usage)) : null };
   });
 }

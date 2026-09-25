@@ -1,6 +1,6 @@
 import type { DeviceActivity, ModelUsage, ProjectActivity, SessionActivity, TokenRow } from "../activity";
 import { REMOTE_LEVELS, SESSION_ID, type Device, type DeviceInfo, type RemoteLevel } from "../team";
-import { newId, randomToken, sha256 } from "./crypto";
+import { newId, openJson, randomToken, sealJson, sha256 } from "./crypto";
 import { db, ensureSchema, placeholders } from "./db";
 import { RequestError } from "./request-error";
 
@@ -8,8 +8,12 @@ import { RequestError } from "./request-error";
  * Computers running AI Cooldown that their owner connected to their account.
  * Each holds its own token (only its hash is stored here) and checks in on its
  * own: what it is, which accounts its CLIs are signed in with, what it lets
- * remote sessions do, and the token usage of the projects it works on.
+ * remote sessions do, and the token usage of the projects it works on. What
+ * it says is kept encrypted, like provider tokens.
  */
+
+/** Computers one account may connect. */
+const MAX_DEVICES = 20;
 
 /** A computer that has not checked in for this long counts as offline; they check in every minute or faster. */
 export const ONLINE_MS = 3 * 60_000;
@@ -20,7 +24,7 @@ type Row = Record<string, unknown>;
 export type DeviceRecord = { id: string; userId: string; info: DeviceInfo; lastSeenAt: number; connected: boolean; activity: DeviceActivity | null; createdAt: number };
 
 function toRecord(r: Row): DeviceRecord {
-  const info = parseInfo(JSON.parse(String(r.info)));
+  const info = parseInfo(openJson(String(r.info)));
   return {
     id: String(r.id),
     userId: String(r.user_id),
@@ -28,7 +32,7 @@ function toRecord(r: Row): DeviceRecord {
     lastSeenAt: Number(r.last_seen_at),
     connected: r.token_hash !== null,
     // Titles go the moment the computer stops sharing, before its next report.
-    activity: r.activity ? parseActivity(JSON.parse(String(r.activity)), info.share) : null,
+    activity: r.activity ? parseActivity(openJson(String(r.activity)), info.share) : null,
     createdAt: Number(r.created_at),
   };
 }
@@ -143,13 +147,20 @@ export function parseActivity(raw: unknown, share: boolean): DeviceActivity | nu
 export async function registerDevice(userId: string, machineId: unknown, info: DeviceInfo): Promise<{ id: string; token: string }> {
   if (typeof machineId !== "string" || !/^[\w-]{8,64}$/.test(machineId)) throw new RequestError(400, "machineId is required.");
   await ensureSchema();
+  const known = await db().execute({
+    sql: "SELECT COUNT(*) AS total, COALESCE(SUM(machine_id = ?), 0) AS this FROM devices WHERE user_id = ?",
+    args: [machineId, userId],
+  });
+  if (Number(known.rows[0].this) === 0 && Number(known.rows[0].total) >= MAX_DEVICES) {
+    throw new RequestError(409, `An account connects up to ${MAX_DEVICES} computers. Remove one on the Team page first.`);
+  }
   const token = randomToken(32);
   const now = Date.now();
   const res = await db().execute({
     sql: `INSERT INTO devices (id, user_id, machine_id, token_hash, info, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id, machine_id) DO UPDATE SET token_hash = excluded.token_hash, info = excluded.info, last_seen_at = excluded.last_seen_at
       RETURNING id`,
-    args: [newId(), userId, machineId, sha256(token), JSON.stringify(info), now, now],
+    args: [newId(), userId, machineId, sha256(token), sealJson(info), now, now],
   });
   return { id: String(res.rows[0].id), token };
 }
@@ -168,8 +179,8 @@ export async function recordSync(id: string, info: DeviceInfo, activity: DeviceA
   const now = Date.now();
   await db().execute(
     activity === undefined
-      ? { sql: "UPDATE devices SET info = ?, last_seen_at = ? WHERE id = ?", args: [JSON.stringify(info), now, id] }
-      : { sql: "UPDATE devices SET info = ?, activity = ?, last_seen_at = ? WHERE id = ?", args: [JSON.stringify(info), activity && JSON.stringify(activity), now, id] },
+      ? { sql: "UPDATE devices SET info = ?, last_seen_at = ? WHERE id = ?", args: [sealJson(info), now, id] }
+      : { sql: "UPDATE devices SET info = ?, activity = ?, last_seen_at = ? WHERE id = ?", args: [sealJson(info), activity && sealJson(activity), now, id] },
   );
 }
 

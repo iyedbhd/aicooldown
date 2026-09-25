@@ -3,7 +3,7 @@ import { getAccount, saveUsage, updatePlan, updateTokens } from "@/lib/server/ac
 import { forwardAccounts } from "@/lib/server/accounts-server";
 import { getSessionUser } from "@/lib/server/auth";
 import { lookupPlan, resolveUsage, type Secrets } from "@/lib/server/usage";
-import { errorResponse, isProvider, readBody, str } from "../_lib";
+import { errorResponse, isProvider, providerThrottled, readBody, str } from "../_lib";
 
 export const runtime = "nodejs";
 
@@ -43,6 +43,8 @@ export async function POST(req: Request) {
 
   const account = body.account;
   if (!account || typeof account !== "object") return NextResponse.json({ error: "id or account is required" }, { status: 400 });
+  const throttled = providerThrottled(req);
+  if (throttled) return throttled;
   const a = account as Record<string, unknown>;
   const accessToken = str(a, "accessToken");
   if (!isProvider(a.provider) || !accessToken) return NextResponse.json({ error: "provider and accessToken are required" }, { status: 400 });

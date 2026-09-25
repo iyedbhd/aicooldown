@@ -135,9 +135,9 @@ xattr -dr com.apple.quarantine "/Applications/AI Cooldown.app"
 
 Open **Team** in the header; it needs an AI Cooldown account. Everyone has a personal workspace, **Just me**, with their own computers, projects and sessions. **New team** starts a team with you as its owner.
 
-- **Invite people with a link.** Optionally bound to one email, it works once and for 7 days. You send it yourself: there is no email service. They sign in or register, see what joining shares, and accept.
+- **Invite people with a link.** Optionally bound to one email, it works once and for 7 days, and only while whoever made it may still invite people. You send it yourself: there is no email service, and emails are not verified, so a bound link only checks the email an account signed up with. Keep links private. They sign in or register, see what joining shares, and accept.
 - **Roles.** The owner renames or deletes the team, changes roles and can hand the team to someone else. Admins invite and remove members. Owners and admins see every member's details; members see the roster and their own.
-- **What owners and admins see**: each member's connected computers (name, system, AI Cooldown version, online or when last seen, and whose accounts the Claude Code and Codex CLIs there are signed in with), every Claude Code and Codex session on them over the last 30 days, the projects worked on there with tokens per day and model and what those tokens would cost at Anthropic's and OpenAI's API list prices, the latest reading of each linked account's limits, and the remote sessions on their computers. What sessions say only from computers that share it; never provider tokens.
+- **What owners and admins see**: each member's connected computers (name, system, AI Cooldown version, online or when last seen, and whose accounts the Claude Code and Codex CLIs there are signed in with), every Claude Code and Codex session on them over the last 30 days, the projects worked on there with tokens per day and model and what those tokens would cost at Anthropic's and OpenAI's API list prices, the latest reading of each linked account's limits, and the remote sessions started on their computers from this team. What sessions say only from computers that share it; never provider tokens. Someone in two teams is seen by the owners and admins of both; a remote session started from one team stays out of the other's sight.
 - **Five views**: Overview (what is live now, totals, tokens per day, limits running out, busiest projects), People (each with their latest sessions), Computers, Projects and Sessions, over 7, 14 or 30 days.
 
 ### Connect a computer
@@ -161,7 +161,9 @@ What sessions started from the browser may do on a computer is set on that compu
 | Edit files | `--permission-mode acceptEdits` | `--sandbox workspace-write` | also edit files in the project (Codex also runs commands in its sandbox, without network) |
 | Full access | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | also run any command, without asking |
 
-Where it is allowed, the computer's owner and the owners and admins of their teams start a session from the Team page: the computer, Claude Code or Codex, one of the projects it reported, what the session may do, the model, and the prompt. The computer picks it up within seconds, runs `claude -p` or `codex exec` in that project as the account that CLI is signed in with (the prompt goes in on standard input, never on a command line) and streams the output back. Cancel it while it runs, or continue the conversation when it is done. On the computer, This machine lists the sessions it ran, a notification says when someone else starts one, **Stop** ends it, and lowering the setting ends a session that asked for more. Only projects the computer reported can be targeted, only conversations started this way can be continued, and a session stops after 30 minutes.
+Where it is allowed, the computer's owner and the owners and admins of their teams start a session from the Team page: the computer, Claude Code or Codex, one of the projects it reported, what the session may do, the model, and the prompt. The computer picks it up within seconds, runs `claude -p` or `codex exec` in that project as the account that CLI is signed in with (the prompt goes in on standard input, never on a command line) and streams the output back. Cancel it while it runs, or continue the conversation when it is done. On the computer, This machine lists the sessions it ran, a notification says when someone else starts one, **Stop** ends it, and lowering the setting ends a session that asked for more. Only projects the computer reported can be targeted, only conversations started this way can be continued, and a session stops after 30 minutes. A computer takes up to 3 waiting sessions at a time, and one person starts up to 100 a day.
+
+A computer runs what the server it is connected to hands it, within its setting: allow remote sessions only on a computer you would trust that server, and the owners and admins of your teams, to run Claude Code or Codex on.
 
 Deploy the website before handing out a desktop build with these features: the desktop app's team pages and check-ins go to aicooldown.com (or your `AICOOLDOWN_ACCOUNTS_SERVER`).
 
@@ -174,7 +176,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000. Guest mode works with zero configuration. `npm run dev` uses the database your `.env.local` names, if it names one: a `.env.local` pulled from Vercel points at your production database. Sign-up works too: it creates a SQLite file at `data/aicooldown.db` and uses a development encryption key with a console warning.
+Open http://localhost:3000. Guest mode works with zero configuration. Sign-up works too: it creates a SQLite file at `data/aicooldown.db` and uses a development encryption key with a console warning. `npm run dev` keeps to that file even when `.env.local` names a database server, since a `.env.local` pulled from Vercel points at production; set `AICOOLDOWN_REMOTE_DB=1` to use that server on purpose.
 
 ### This machine: switch CLI logins and start the 5-hour clock early
 
@@ -185,7 +187,7 @@ When the app runs on your own computer (the [desktop app](#desktop-app), `npm ru
 - **Say hello** sends `hello` through the CLI as that login (Haiku for Claude). A 5-hour session window starts at your first message, so saying hello before you need the account means it resets sooner.
 - **Schedule** sends that hello at the next reset, after every reset (keeping a fresh window rolling), or at a time you pick. Schedules run in the server process and survive restarts; one missed while the server was down fires when it starts again.
 
-Saved logins live in `cli-profiles/` and schedules in `local-schedules.json` inside the data folder (`./data`, the desktop app's `data` folder, or wherever `AICOOLDOWN_DATA_DIR` points), on your machine only. The section is never served on Vercel or to anything but `localhost`. Claude switching needs the file-based login (`~/.claude/.credentials.json`, Windows and Linux); on macOS Claude Code keeps it in the Keychain instead.
+Saved logins live in `cli-profiles/` and schedules in `local-schedules.json` inside the data folder (`./data`, the desktop app's `data` folder, or wherever `AICOOLDOWN_DATA_DIR` points), on your machine only. The section is never served on Vercel, and only answers requests from this computer: `npm run dev` and `npm start` listen on your network too, so every request's actual network peer is checked, not just its Host header. On a computer shared with other accounts, those accounts can reach it too. Claude switching needs the file-based login (`~/.claude/.credentials.json`, Windows and Linux); on macOS Claude Code keeps it in the Keychain instead.
 
 To tell Claude logins apart, the app asks Anthropic whose account each token is (the profile request Claude Code itself makes, once per token). The account named in `~/.claude.json` is not enough, because the Claude desktop app writes its own account there too. A login this can't identify, because its access token expired before the app saw it, is not saved or switched until you run `claude` once to refresh it.
 
@@ -200,6 +202,10 @@ To tell Claude logins apart, the app asks Anthropic whose account each token is 
 | `LIBSQL_AUTH_TOKEN` | with Turso | The database auth token. |
 
 Any host that runs Next.js works: Vercel, Netlify, a Node server, Docker. The API routes need outbound HTTPS to `api.anthropic.com`, `platform.claude.com`, `chatgpt.com` and `auth.openai.com`. Copy `.env.example` to `.env.local` to get started.
+
+Keep production's database and `APP_SECRET` to production. `npm run dev` stays on a local file (see above), but `npm start` uses whatever `.env.local` says. On Vercel, give Preview deployments their own database, or none, and keep Git Fork Protection on, so a pull request's build never reaches production's data.
+
+What a copy of the database would show: account and invite emails, scrypt password hashes, team names and roles, linked accounts' labels and plans, the project folders and models of remote sessions, and when things happened. Sessions, devices and invites are stored as hashes of their tokens. Provider tokens, what computers report (names, projects, sessions), usage readings, remote sessions' prompts, output and results, and conversations are encrypted with `APP_SECRET`.
 
 ## Under the hood
 

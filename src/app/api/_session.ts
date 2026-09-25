@@ -11,10 +11,15 @@ type Options = {
   throttle?: boolean;
 };
 
-/** A RequestError as its status and message; anything else as a 500. */
+/**
+ * A RequestError as its status and message. Anything else is a 500 that says
+ * nothing of the server's insides (a database error names tables and hosts):
+ * those go to its log.
+ */
 export function failure(err: unknown): NextResponse {
   if (err instanceof RequestError) return NextResponse.json({ error: err.message }, { status: err.status });
-  return NextResponse.json({ error: err instanceof Error ? err.message : "Unexpected error" }, { status: 500 });
+  console.error("[api]", err);
+  return NextResponse.json({ error: "Something went wrong on the server. Try again in a moment." }, { status: 500 });
 }
 
 /**

@@ -4,6 +4,7 @@ import type { User } from "./auth";
 import { db, ensureSchema } from "./db";
 import { listDevices } from "./devices";
 import { RequestError } from "./request-error";
+import { purgeExpired } from "./retention";
 import { listRuns } from "./runs";
 import { listInvites, roleIn } from "./teams";
 
@@ -17,6 +18,7 @@ const ROLE_ORDER: Record<Role, number> = { owner: 0, admin: 1, member: 2 };
  */
 export async function workspace(viewer: User, scope: string): Promise<Workspace> {
   await ensureSchema();
+  await purgeExpired();
   let team: Workspace["team"] = null;
   let role: Role | null = null;
   let people: { id: string; email: string; role: Role | null; joinedAt: number | null }[];
@@ -37,7 +39,7 @@ export async function workspace(viewer: User, scope: string): Promise<Workspace>
   const seesAll = role === "owner" || role === "admin";
   const detailed = people.filter((p) => seesAll || p.id === viewer.id).map((p) => p.id);
   const [devices, accounts, invites] = await Promise.all([listDevices(detailed), listAccountsWithUsage(detailed), team && seesAll ? listInvites(team.id) : []]);
-  const runs = await listRuns(devices.map((d) => d.id));
+  const runs = await listRuns(devices.map((d) => d.id), viewer.id, team?.id ?? null);
   const members: Member[] = people.map((p) => ({
     ...p,
     detailed: detailed.includes(p.id),

@@ -345,7 +345,8 @@ function InviteCard({ ws, now, reload, flash }: { ws: Workspace; now: number; re
               </button>
             </div>
             <p className="mt-1 text-[11px] text-faint">
-              Send it yourself: this is the only time it is shown. It works once, for {made.invite.email ?? "whoever opens it first"}, within 7 days.
+              Send it yourself, privately: this is the only time it is shown. It works once, for {made.invite.email ?? "whoever opens it first"}, within 7 days.
+              {made.invite.email ? " AI Cooldown does not verify emails, so the link is what keeps it theirs." : ""}
             </p>
           </div>
         )}

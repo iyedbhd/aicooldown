@@ -1,0 +1,7 @@
+# What a CLI deploy (vercel) must never upload: local data and secrets.
+.env*
+!.env.example
+data/
+*.db
+*.db-*
+.claude/
