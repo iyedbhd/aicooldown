@@ -96,6 +96,7 @@ body {
   color: var(--bg);
 }
 .btn-primary:hover:not(:disabled) {
+  color: var(--bg); /* not .btn:hover's, which is its background */
   opacity: 0.88;
 }
 .btn-accent {
