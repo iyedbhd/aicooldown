@@ -415,6 +415,29 @@ export function findCli(provider: Provider): { bin: string; shell: boolean } | n
 /** The CLI to start, or its bare name when there is none, so starting it says it was not found. */
 export const cliBin = (provider: Provider) => findCli(provider) ?? { bin: provider, shell: process.platform === "win32" };
 
+/** Every running program's command line, one per line; empty when they can't be read. */
+function commandLines(): Promise<string> {
+  const [bin, args] =
+    process.platform === "win32"
+      ? ["powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }"]]
+      : ["ps", ["-axww", "-o", "command="]];
+  return new Promise((resolve) => {
+    execFile(bin, args, { timeout: 15_000, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (err, out) => resolve(err ? "" : String(out)));
+  });
+}
+
+/**
+ * Whether a program running on this computer has this conversation (`id`, a
+ * SESSION_ID) open: its command line continues it, as the Claude app's
+ * session for a chat it has open does (`claude --resume=<id>`), or a
+ * terminal's `claude --resume <id>` and `codex resume <id>`. Such a program
+ * keeps what was said to itself: a turn added from elsewhere is missing from
+ * what it shows, and its next reply goes on without it.
+ */
+export async function conversationOpen(id: string): Promise<boolean> {
+  return new RegExp(`(?:--resume|--session-id|-r|\\bresume)[=\\s]+"?${id}`, "i").test(await commandLines());
+}
+
 /**
  * Whether a CLI can run remote sessions here. Signed out only when that is
  * certain: on macOS Claude Code keeps its login in the Keychain, where this

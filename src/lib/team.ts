@@ -322,12 +322,19 @@ export const manages = (role: Role | null) => role === "owner" || role === "admi
 /** Whether the viewer may start sessions on this computer at all: their own, or anyone's in a team they manage. */
 export const mayRunOn = (ws: Workspace, device: Device) => device.userId === ws.me.id || manages(ws.role);
 
-/** Why a session cannot start on this computer right now (with `tool`, when given), or null when it can. */
-export function unavailable(device: Device, tool?: Tool): string | null {
+/**
+ * Why a session cannot start on this computer right now (with `tool`, when
+ * given), or null when it can. `open`: the conversation is open in a program
+ * there that takes messages (SessionActivity.open), which runs it on its own
+ * login, whatever the CLI's.
+ */
+export function unavailable(device: Device, tool?: Tool, open = false): string | null {
   if (!device.connected) return "disconnected";
   if (!device.online) return "offline";
   if (device.remote === "off") return "remote sessions off";
+  if (open) return null;
   if (tool && device.tools[tool] === "missing") return `${TOOL_NAME[tool]} is not installed there`;
+  if (tool === "claude" && device.tools.claude === "signed-out") return "the Claude Code CLI is not signed in there: its owner signs it in once, under This machine there. A chat open in the Claude app there takes messages without it";
   if (tool && device.tools[tool] === "signed-out") return `${TOOL_NAME[tool]} is not signed in there`;
   return null;
 }
@@ -337,10 +344,11 @@ export function unavailable(device: Device, tool?: Tool): string | null {
  * computer, or null when they can: a conversation a remote session started,
  * or any of the computer's sessions the viewer sees, for its owner, and for
  * its owner's team admins when it lets what sessions say reach the website.
+ * `open`: see unavailable.
  */
-export function chatBlocked(ws: Workspace, device: Device, tool: Tool, startedHere: boolean): string | null {
+export function chatBlocked(ws: Workspace, device: Device, tool: Tool, startedHere: boolean, open: boolean): string | null {
   if (!mayRunOn(ws, device)) return "Only its owner and the admins of their teams start sessions there.";
-  const why = unavailable(device, tool);
+  const why = unavailable(device, tool, open);
   if (why) return `${device.name}: ${why}.`;
   if (startedHere) return null;
   if (!versionAtLeast(device.version, CHAT_VERSION)) return `Update AI Cooldown on ${device.name} to ${CHAT_VERSION} or later to continue its own sessions from here.`;

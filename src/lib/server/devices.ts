@@ -207,6 +207,7 @@ function parseSessions(raw: unknown, titles: boolean): SessionActivity[] {
       usage: objects(x.usage, 20).map(usageOf),
       subagents: count(x.subagents),
       ...(work && { work }),
+      ...(typeof x.open === "string" && /^[\w.-]{1,40}$/.test(x.open) && { open: x.open }),
     });
   }
   return sessions;

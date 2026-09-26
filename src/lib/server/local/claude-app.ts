@@ -229,6 +229,25 @@ function homeOrg(account: string, lists: { org: string; raw: RawChat[] }[], ledg
   return lists.length === 1 ? lists[0].org : null;
 }
 
+/**
+ * The permission mode of the Claude app's chat that continues Claude Code
+ * conversation `id` (its cliSessionId), as the app notes it for the chat:
+ * "default", "acceptEdits", "plan", "auto", "bypassPermissions"...; null when
+ * no chat there continues it, or it notes none.
+ */
+export async function appChatMode(id: string): Promise<string | null> {
+  const dir = await appDir();
+  if (!dir) return null;
+  const root = at(dir, "claude-code-sessions");
+  for (const account of await subdirs(root)) {
+    for (const org of await subdirs(at(root, account))) {
+      const chat = (await readChats(at(root, account, org))).find((c) => c.json.cliSessionId === id);
+      if (chat) return text(chat.json.permissionMode);
+    }
+  }
+  return null;
+}
+
 type Snapshot = { dir: string | null; root: string; running: boolean; ledger: Ledger; places: RawPlace[] };
 
 async function snapshot(): Promise<Snapshot> {

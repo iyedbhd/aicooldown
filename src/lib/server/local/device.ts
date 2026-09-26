@@ -17,6 +17,7 @@ import {
   REMOTE_LABEL,
   REMOTE_LEVELS,
   SESSION_ID,
+  TOOL_NAME,
   type CommandKind,
   type DeviceInfo,
   type DeviceManage,
@@ -27,11 +28,16 @@ import {
   type ShareLevel,
   type ToolState,
 } from "@/lib/team";
+import { openIn } from "@/lib/team-stats";
 import type { Provider } from "@/lib/types";
 import pkg from "../../../../package.json";
 import { scanActivity, type Scan } from "./activity";
-import { liveState, readLoginPath, toolState } from "./cli";
-import { runSession, type RunReport } from "./runner";
+import { appChatMode } from "./claude-app";
+import { conversationOpen, liveState, readLoginPath, toolState } from "./cli";
+import { FROM, liveSession, liveSessions, type LiveSession } from "./inbox";
+import { runInbox, type OpenChat } from "./inbox-run";
+import type { RunReport } from "./outbox";
+import { runSession } from "./runner";
 import { decodedBytes, readImages, readTranscript, type LoggedImage, type TranscriptEvent } from "./transcript";
 
 /*
@@ -219,9 +225,28 @@ async function deviceInfo(stored: Stored): Promise<DeviceInfo & { manage: Device
   };
 }
 
-/** The activity report as it leaves this computer: without session titles unless what sessions say reaches the website. */
-function report(activity: DeviceActivity, share: ShareLevel): DeviceActivity {
-  return share !== "off" ? activity : { ...activity, sessions: activity.sessions.map((s) => ({ ...s, title: null })) };
+/**
+ * The activity report as it leaves this computer: without session titles
+ * unless what sessions say reaches the website, and with what has each
+ * conversation open now, when that takes messages (`open`, by conversation id).
+ */
+function report(activity: DeviceActivity, share: ShareLevel, open: Map<string, string>): DeviceActivity {
+  return {
+    ...activity,
+    sessions: activity.sessions.map((s) => {
+      const where = s.tool === "claude" ? open.get(s.id) : undefined;
+      return { ...s, title: share !== "off" ? s.title : null, ...(where && { open: where }) };
+    }),
+  };
+}
+
+/** The Claude Code conversations open in a program here that takes messages (see inbox.ts), by id, with what that program is. */
+async function openHere(): Promise<Map<string, string>> {
+  const open = new Map<string, string>();
+  for (const s of await liveSessions().catch(() => [])) {
+    if (!open.has(s.sessionId)) open.set(s.sessionId, s.entrypoint && /^[\w.-]{1,40}$/.test(s.entrypoint) ? s.entrypoint : "unknown");
+  }
+  return open;
 }
 
 function agentFetch(link: Link, route: string, method: string, body?: unknown, timeoutMs = TIMEOUT_MS): Promise<Response> {
@@ -280,7 +305,7 @@ async function sync(): Promise<void> {
   // The logs can be large: a check-in waits for the first read only, and later ones go on meanwhile.
   if (!runtime.scan) await rescan();
   else if (Date.now() - runtime.scan.at > SCAN_MS) void rescan();
-  const activity = runtime.scan ? report(runtime.scan.activity, effectiveShare(stored)) : null;
+  const activity = runtime.scan ? report(runtime.scan.activity, effectiveShare(stored), await openHere()) : null;
   const outgoing = activity && JSON.stringify(activity);
   const sending = outgoing !== null && outgoing !== runtime.reported;
   const res = await agentFetch(link, "/api/agent", "POST", { info: await deviceInfo(stored), activity: sending ? activity : undefined, busy: runtime.running !== null });
@@ -576,6 +601,86 @@ function refusal(job: RunJob, stored: Stored): string | null {
   return null;
 }
 
+/**
+ * Why a conversation has to be continued where it is open, or null: a program
+ * here has it open that takes no messages (Codex, or Claude Code before 2.1.234
+ * in a terminal; one that takes them gets the message, see intoOpen). That
+ * program keeps what was said to itself, so a turn added from here would be
+ * missing from what it shows and says next.
+ */
+async function heldOpen(job: RunJob): Promise<string | null> {
+  if (job.resume === null || !(await conversationOpen(job.resume))) return null;
+  return job.tool === "claude"
+    ? "That conversation is open in a program on this computer that keeps its own copy of it and takes no messages from other programs (Claude Code 2.1.234 or later does): continue it there, or close it there and send again."
+    : "That conversation is open in Codex on this computer, which keeps its own copy of it: continue it there, or close it there and send again.";
+}
+
+/**
+ * What a chat in each permission mode may do without asking at the computer,
+ * as the level a message into it needs: Plan changes nothing; Ask permissions
+ * and Don't ask run what the settings allow and ask about or refuse the rest,
+ * and Accept edits edits files too, as an Edit files session may. Auto and
+ * Bypass permissions, or a mode not known, need full access.
+ */
+const MODE_NEEDS: Record<string, RemoteLevel> = { plan: "read", default: "edit", dontAsk: "edit", acceptEdits: "edit" };
+
+/** The Claude app's names for the permission modes. */
+const MODE_NAME: Record<string, string> = { plan: "Plan", default: "Ask permissions", dontAsk: "Don't ask", acceptEdits: "Accept edits", auto: "Auto", bypassPermissions: "Bypass permissions" };
+
+type Plan = { refused: string } | { chat: OpenChat } | { cli: string };
+
+/**
+ * A message into a conversation open in a program here that takes messages
+ * (see inbox.ts), or why not. It runs there with that session's own
+ * permissions, so the level it was sent with must cover what that session may
+ * do without asking: the Claude app notes each chat's permission mode, and
+ * for any other program it is not known, which takes full access.
+ */
+async function intoOpen(job: RunJob, stored: Stored, session: LiveSession): Promise<Plan> {
+  const place = openIn(session.entrypoint ?? "");
+  const mode = session.entrypoint === "claude-desktop" ? await appChatMode(session.sessionId).catch(() => null) : null;
+  const needs = (mode && MODE_NEEDS[mode]) || "full";
+  const how = mode ? ` in ${MODE_NAME[mode] ?? mode} mode` : "";
+  if (!levelAllows(job.mode, needs)) {
+    const whose = mode ? "the chat's own permissions" : "that session's own permissions, which AI Cooldown can't see";
+    return {
+      refused: levelAllows(stored.remote, needs)
+        ? `That conversation is open in ${place} here${how}, where a message runs with ${whose}: send it with "${REMOTE_LABEL[needs]}"${needs === "full" ? "" : " or more"}, or continue it there.`
+        : `That conversation is open in ${place} here${how}, where a message runs with ${whose}: more than this computer lets remote sessions do ("${REMOTE_LABEL[stored.remote]}"). Continue it there, or close it there and send again.`,
+    };
+  }
+  const log = await logFor(job.tool, session.sessionId);
+  if (!log) return { refused: "That conversation's log is not on this computer (any more)." };
+  // Its owner's message says it is from AI Cooldown; anyone else's, whose it is too, to whoever sits at the computer.
+  const from = job.by === null || job.by === stored.owner?.email ? FROM : `${FROM} (${job.by})`;
+  return { chat: { session, log, from, place, note: `Sent into the conversation open in ${place}${how}: it runs there, with the model and permissions it has there.` } };
+}
+
+/**
+ * How this computer runs the session: into the program that has its
+ * conversation open, when that takes messages; through the CLI in its
+ * project's folder; or not at all, and why.
+ */
+async function planRun(job: RunJob, stored: Stored): Promise<Plan> {
+  const refused = refusal(job, stored);
+  if (refused) return { refused };
+  const open = job.tool === "claude" && job.resume !== null ? await liveSession(job.resume) : null;
+  if (open) return intoOpen(job, stored, open);
+  const held = await heldOpen(job);
+  if (held) return { refused: held };
+  const cli = (await clis()).tools[job.tool];
+  if (cli === "missing") return { refused: `${TOOL_NAME[job.tool]} is not installed on this computer.` };
+  if (cli === "signed-out") {
+    return {
+      refused:
+        job.tool === "claude"
+          ? `The Claude Code CLI is not signed in on this computer${job.resume ? ", and that conversation is not open in the Claude app here: open it there, or sign the CLI in" : ": its owner signs it in"} once, under This machine.`
+          : "The Codex CLI is not signed in on this computer: its owner signs it in once, under This machine.",
+    };
+  }
+  return { cli: runtime.scan!.folders.get(job.project)! };
+}
+
 async function execute(job: RunJob, link: Link): Promise<void> {
   const stop = new AbortController();
   const run: LocalRun = {
@@ -599,14 +704,16 @@ async function execute(job: RunJob, link: Link): Promise<void> {
   };
   let status: RunStatus = "failed";
   try {
-    const refused = refusal(job, await load());
+    const plan = await planRun(job, await load());
     await update((s) => {
       s.runs = [run, ...s.runs.filter((r) => r.id !== run.id)].slice(0, KEEP_RUNS);
     });
-    if (refused) {
-      await send({ events: [{ at: Date.now(), kind: "error", text: refused }], status: "failed", result: { error: refused } }).catch(() => undefined);
+    if ("refused" in plan) {
+      await send({ events: [{ at: Date.now(), kind: "error", text: plan.refused }], status: "failed", result: { error: plan.refused } }).catch(() => undefined);
+    } else if ("chat" in plan) {
+      status = await runInbox(job, plan.chat, send, stop.signal);
     } else {
-      const out = await runSession(job, runtime.scan!.folders.get(job.project)!, send, stop.signal);
+      const out = await runSession(job, plan.cli, send, stop.signal);
       status = out.status;
       run.sessionId = out.sessionId ?? run.sessionId;
     }

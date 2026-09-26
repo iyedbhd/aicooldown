@@ -105,37 +105,46 @@ export async function readImages(tool: Tool, file: string, wanted: Set<number>):
   return found;
 }
 
+/**
+ * The steps in one Claude Code log entry, as a conversation shows them: a
+ * prompt, what the model said, a tool call or what it returned, a note.
+ * `blocks` has the reply blocks shown so far: a reply's blocks can repeat
+ * across lines, and each shows once.
+ */
+export function claudeSteps(entry: Record<string, unknown>, blocks: Set<string>, push: (at: number, kind: RunEventKind, text: string) => void): void {
+  const at = Date.parse(String(entry.timestamp)) || 0;
+  if (entry.type === "user") {
+    const prompt = claudePrompt(entry);
+    if (prompt) push(at, "user", clip(prompt, MAX_TEXT));
+    const content = (entry.message as { content?: unknown } | undefined)?.content;
+    if (Array.isArray(content)) {
+      for (const b of content as Record<string, unknown>[]) {
+        if (b?.type === "tool_result") push(at, b.is_error ? "error" : "output", clip(outputText(b.content), MAX_OUTPUT));
+      }
+    }
+  } else if (entry.type === "assistant") {
+    const message = entry.message as { id?: unknown; content?: unknown } | undefined;
+    if (!Array.isArray(message?.content)) return;
+    (message.content as Record<string, unknown>[]).forEach((b, i) => {
+      const key = `${message.id}:${entry.apiBlockIndex ?? i}:${b?.type}`;
+      if (blocks.has(key)) return;
+      blocks.add(key);
+      if (b?.type === "text" && typeof b.text === "string") push(at, "text", clip(b.text, MAX_TEXT));
+      else if (b?.type === "tool_use") push(at, "tool", describeTool(String(b.name), b.input));
+    });
+  } else if (entry.type === "system" && entry.subtype === "compact_boundary") {
+    push(at, "info", "Context compacted");
+  }
+}
+
 async function readClaude(file: string, push: (at: number, kind: RunEventKind, text: string) => void): Promise<void> {
   const blocks = new Set<string>();
   let images = 0;
   for await (const line of lines(file)) {
     const entry = parse(line);
     if (!entry || entry.isSidechain) continue;
-    const at = Date.parse(String(entry.timestamp)) || 0;
-    if (entry.type === "user") {
-      const prompt = claudePrompt(entry);
-      if (prompt) push(at, "user", clip(prompt, MAX_TEXT));
-      const content = (entry.message as { content?: unknown } | undefined)?.content;
-      if (Array.isArray(content)) {
-        for (const b of content as Record<string, unknown>[]) {
-          if (b?.type === "tool_result") push(at, b.is_error ? "error" : "output", clip(outputText(b.content), MAX_OUTPUT));
-        }
-      }
-      for (const image of claudeImages(entry)) push(at, "image", imageNote(images++, image));
-    } else if (entry.type === "assistant") {
-      const message = entry.message as { id?: unknown; content?: unknown } | undefined;
-      if (!Array.isArray(message?.content)) continue;
-      (message.content as Record<string, unknown>[]).forEach((b, i) => {
-        // Each content block is written once, but a reply's blocks can repeat across lines.
-        const key = `${message.id}:${entry.apiBlockIndex ?? i}:${b?.type}`;
-        if (blocks.has(key)) return;
-        blocks.add(key);
-        if (b?.type === "text" && typeof b.text === "string") push(at, "text", clip(b.text, MAX_TEXT));
-        else if (b?.type === "tool_use") push(at, "tool", describeTool(String(b.name), b.input));
-      });
-    } else if (entry.type === "system" && entry.subtype === "compact_boundary") {
-      push(at, "info", "Context compacted");
-    }
+    claudeSteps(entry, blocks, push);
+    if (entry.type === "user") for (const image of claudeImages(entry)) push(Date.parse(String(entry.timestamp)) || 0, "image", imageNote(images++, image));
   }
 }
 

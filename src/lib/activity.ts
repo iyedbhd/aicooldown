@@ -94,6 +94,14 @@ export type SessionActivity = {
   subagents: number;
   /** What it did, its subagents included; undefined from a computer before 0.13. */
   work?: SessionWork;
+  /**
+   * What has the conversation open on the computer right now, when that takes
+   * messages from AI Cooldown, as Claude Code names it: "claude-desktop" (a chat
+   * open in the Claude app), "cli" (a terminal), "claude-vscode" and so on. A
+   * message from the website goes into it there. Undefined otherwise, and from a
+   * computer before 0.14.
+   */
+  open?: string;
 };
 
 export type DeviceActivity = {

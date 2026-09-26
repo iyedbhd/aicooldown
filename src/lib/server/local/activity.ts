@@ -23,6 +23,7 @@ import {
 } from "@/lib/activity";
 import { DATA_DIR } from "@/lib/server/data-dir";
 import { livePlace } from "./cli";
+import { sentMessage } from "./inbox";
 
 /*
  * What this computer's Claude Code and Codex CLIs worked on, from the session
@@ -175,19 +176,28 @@ export function parse(line: string): Record<string, unknown> | null {
   }
 }
 
-/** What someone typed, from a Claude Code user entry: not a tool result, a command or the CLI's own reminders. */
-export function claudePrompt(entry: Record<string, unknown>): string | null {
-  if (entry.isMeta || entry.isSidechain) return null;
+/** A Claude Code entry's message as text: all of it, or its text blocks joined. */
+export function claudeText(entry: Record<string, unknown>): string {
   const content = (entry.message as { content?: unknown } | undefined)?.content;
-  const typed =
-    typeof content === "string"
-      ? content
-      : Array.isArray(content)
-        ? content
-            .filter((b): b is { type: string; text: string } => Boolean(b) && (b as { type?: unknown }).type === "text" && typeof (b as { text?: unknown }).text === "string")
-            .map((b) => b.text)
-            .join("\n")
-        : "";
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((b): b is { type: string; text: string } => Boolean(b) && (b as { type?: unknown }).type === "text" && typeof (b as { text?: unknown }).text === "string")
+    .map((b) => b.text)
+    .join("\n");
+}
+
+/**
+ * What someone typed, from a Claude Code user entry: not a tool result, a
+ * command or the CLI's own reminders. A message AI Cooldown put into a session
+ * open on the computer (see inbox.ts) counts, as what was typed on the website.
+ */
+export function claudePrompt(entry: Record<string, unknown>): string | null {
+  if (entry.isSidechain) return null;
+  const typed = claudeText(entry);
+  const sent = sentMessage(typed);
+  if (sent !== null) return sent.trim() ? sent : null;
+  if (entry.isMeta) return null;
   return typed.trim() && !typed.trimStart().startsWith("<") ? typed : null;
 }
 

@@ -81,6 +81,11 @@ const SOURCES: Record<string, string> = {
 /** Where a session ran, in words: "remote" for one started from the dashboard, and what it started in otherwise. */
 export const sourceLabel = (s: Pick<SessionRow, "source" | "started">) => (s.started ? "remote" : s.source ? (SOURCES[s.source] ?? s.source) : "—");
 
+const OPEN_IN: Record<string, string> = { "claude-desktop": "the Claude app", cli: "a terminal", "claude-vscode": "VS Code", vscode: "VS Code" };
+
+/** Where a conversation is open (SessionActivity.open), in words: "the Claude app", "a terminal". */
+export const openIn = (open: string) => OPEN_IN[open] ?? "another program";
+
 /*
  * What the team page adds up from a workspace: totals over a period, tokens
  * per day, projects across people and computers, and limits running out.

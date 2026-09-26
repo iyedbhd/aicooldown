@@ -1,8 +1,9 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { costOf } from "@/lib/pricing";
-import type { RunEventKind, RunJob, RunResult, RunStatus } from "@/lib/team";
+import type { RunEventKind, RunJob, RunStatus } from "@/lib/team";
 import { codexModel } from "./activity";
 import { cliBin, liveEnv } from "./cli";
+import { outbox, type Reporter } from "./outbox";
 import { describeTool, outputText } from "./transcript";
 
 /*
@@ -16,9 +17,6 @@ import { describeTool, outputText } from "./transcript";
 
 /** A session may run this long before it is stopped. */
 const TIMEOUT_MS = 30 * 60_000;
-/** How often output is sent while it runs. */
-const FLUSH_MS = 1_500;
-const MAX_TEXT = 4_000;
 const MAX_OUTPUT = 1_500;
 
 type Level = "read" | "edit" | "full";
@@ -45,12 +43,6 @@ function command(job: RunJob): string[] {
   if (job.model) args.push("--model", job.model);
   return job.resume ? [...args, "resume", job.resume, "-"] : [...args, "-"];
 }
-
-export type RunEvent = { at: number; kind: RunEventKind; text: string };
-export type RunReport = { events: RunEvent[]; sessionId?: string; status?: RunStatus; result?: RunResult };
-
-/** Sends a report; answers whether whoever started the session asked to cancel it. */
-export type Reporter = (report: RunReport) => Promise<{ cancel: boolean }>;
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
@@ -205,20 +197,16 @@ export function runSession(job: RunJob, folder: string, report: Reporter, stop: 
   live.add(child);
   child.on("close", () => live.delete(child));
 
-  let pending: RunEvent[] = [];
-  let sentSession = false;
   let ended: { status: RunStatus; error: string } | null = null;
   let stderr = "";
   let partial = "";
 
-  const push = (kind: RunEventKind, text: string) => {
-    if (text.trim()) pending.push({ at: Date.now(), kind, text: clip(text, MAX_TEXT) });
-  };
-  const stream = job.tool === "claude" ? claudeStream(job, push) : codexStream(job, push);
   const end = (status: RunStatus, error: string) => {
     ended ??= { status, error };
     killTree(child);
   };
+  const stream = (job.tool === "claude" ? claudeStream : codexStream)(job, (kind, text) => out.push(kind, text));
+  const out = outbox(report, stream.sessionId, () => end("cancelled", "Cancelled from the dashboard."));
   const onLine = (line: string) => {
     try {
       const msg: unknown = JSON.parse(line);
@@ -243,32 +231,12 @@ export function runSession(job: RunJob, folder: string, report: Reporter, stop: 
   if (stop.aborted) onStop(); // stopped between being picked up and starting
   const timeout = setTimeout(() => end("failed", `Stopped after ${TIMEOUT_MS / 60_000} minutes.`), TIMEOUT_MS);
 
-  /** Sends what is pending; a failed send keeps it for the next one. */
-  async function flush(final?: { status: RunStatus; result: RunResult }): Promise<void> {
-    const batch = pending;
-    const id = stream.sessionId();
-    const newSession = id && !sentSession ? id : undefined;
-    if (!final && batch.length === 0 && !newSession) return;
-    pending = [];
-    try {
-      const { cancel } = await report({ events: batch, sessionId: newSession, ...final });
-      if (newSession) sentSession = true;
-      if (cancel && !final) end("cancelled", "Cancelled from the dashboard.");
-    } catch (err) {
-      pending = [...batch, ...pending];
-      if (final) throw err;
-    }
-  }
-
   return new Promise((resolve) => {
-    let flushing = Promise.resolve();
-    const ticker = setInterval(() => (flushing = flushing.then(() => flush())), FLUSH_MS);
     let finished = false;
     const finish = async (code: number | null, spawnError?: string) => {
       // A failed start emits both "error" and "close".
       if (finished) return;
       finished = true;
-      clearInterval(ticker);
       clearTimeout(timeout);
       stop.removeEventListener("abort", onStop);
       if (partial.trim()) onLine(partial);
@@ -280,23 +248,13 @@ export function runSession(job: RunJob, folder: string, report: Reporter, stop: 
           : outcome?.ok
             ? { status: "done", error: "" }
             : { status: "failed", error: outcome?.text || stderr.trim().split("\n").slice(-3).join(" ") || `The CLI exited with code ${code}.` });
-      if (done.status === "done" && job.tool === "codex") push("result", outcome?.text || "Done.");
-      if (done.error && done.status !== "done") push(done.status === "cancelled" ? "info" : "error", done.error);
+      if (done.status === "done" && job.tool === "codex") out.push("result", outcome?.text || "Done.");
+      if (done.error && done.status !== "done") out.push(done.status === "cancelled" ? "info" : "error", done.error);
       const costUsd = outcome?.costUsd ?? (job.tool === "codex" ? await codexCost(job, stream.sessionId(), started, outcome?.usage) : undefined);
-      const final = {
+      await out.close({
         status: done.status,
         result: { costUsd, turns: outcome?.turns, durationMs: outcome?.durationMs ?? Date.now() - started, error: done.error || undefined },
-      };
-      await flushing;
-      // The last report carries the outcome: worth a few tries.
-      for (let attempt = 0; attempt < 5; attempt++) {
-        try {
-          await flush(final);
-          break;
-        } catch {
-          await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
-        }
-      }
+      });
       resolve({ status: done.status, sessionId: stream.sessionId() });
     };
     const cli = job.tool === "claude" ? "Claude Code" : "Codex";

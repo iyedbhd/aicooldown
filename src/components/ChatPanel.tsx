@@ -33,7 +33,7 @@ import {
   type Transcript,
   type Workspace,
 } from "@/lib/team";
-import { sourceLabel, type SessionRow } from "@/lib/team-stats";
+import { openIn, sourceLabel, type SessionRow } from "@/lib/team-stats";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
 import { RefreshButton, useRefresh } from "./RefreshButton";
@@ -300,7 +300,9 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
   const shownRuns = runs.filter((r) => r.createdAt > cutoff);
   // Started from here: the conversation's first turn was a remote session (continuing one of the computer's own does not count).
   const fromHere = sessionId === null || runs.some((r) => r.sessionId === sessionId && r.resume === null);
-  const blocked = !device ? "Pick a computer to run on." : chatBlocked(ws, device, tool, fromHere);
+  // Open in a program there that takes messages: a message goes into it, whatever the computer's CLI.
+  const open = session?.open ?? null;
+  const blocked = !device ? "Pick a computer to run on." : chatBlocked(ws, device, tool, fromHere, open !== null);
   const chosenMode = mode ?? defaultMode(device, last);
   // A conversation's own model, not Codex's placeholder from before its first turn said which.
   const sessionModel = session?.model && session.model !== "codex" && session.model !== "unknown" ? session.model : null;
@@ -474,8 +476,12 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
         </ImageProvider>
 
         <footer className="border-t border-line px-4 py-3 sm:px-5">
-          {session?.active && !active && !blocked && (
-            <p className="mb-2 text-[11px] text-amber-700 dark:text-amber-300">This conversation is open on {device?.name} right now: a message from here runs alongside it.</p>
+          {!active && !blocked && (open || session?.active) && (
+            <p className="mb-2 text-[11px] text-amber-700 dark:text-amber-300">
+              {open
+                ? `Open in ${openIn(open)} on ${device?.name}: a message from here goes into it there, and runs with the model and permissions it has there.`
+                : `This conversation was in use on ${device?.name} moments ago.`}
+            </p>
           )}
           {blocked ? (
             <p className="text-[12px] text-muted">{blocked}</p>

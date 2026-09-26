@@ -188,12 +188,16 @@ export async function createRun(viewer: User, raw: Record<string, unknown>): Pro
   }
   if (!isOnline(device)) throw new RequestError(409, `${name} is offline. A session starts on a computer that is on, with AI Cooldown running.`);
   const cli = device.info.tools[tool];
-  if (cli !== "ready") {
+  // A conversation open in a program there that takes messages (a chat open in the Claude app) goes into it and runs on that program's login, whatever the CLI's.
+  const open = resume !== null && Boolean(device.activity?.sessions.some((s) => s.tool === tool && s.id === resume && s.open));
+  if (cli !== "ready" && !open) {
     throw new RequestError(
       409,
       cli === "missing"
         ? `${TOOL_NAME[tool]} is not installed on ${name}.`
-        : `${TOOL_NAME[tool]} is not signed in on ${name}. Its owner signs it in once there: AI Cooldown shows how, under This machine.`,
+        : tool === "claude"
+          ? `The Claude Code CLI is not signed in on ${name}${resume ? ", and that conversation is not open in the Claude app there" : ""}. Its owner signs it in once there: AI Cooldown shows how, under This machine.`
+          : `${TOOL_NAME[tool]} is not signed in on ${name}. Its owner signs it in once there: AI Cooldown shows how, under This machine.`,
     );
   }
   if (!levelAllows(device.info.remote, mode)) {
