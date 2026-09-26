@@ -121,7 +121,7 @@ export function DevicePanel({ device, tools, user, now, busy, run }: Props) {
         {device.error && <p className="text-xs text-amber-700 dark:text-amber-300">{device.error}</p>}
         <p className="text-[11px] text-faint">
           While connected it reports its name and system, the accounts its CLIs are signed in with, and each Claude Code and Codex session in the CLIs&apos; logs:
-          its project folder and git branch, where it ran, its models, times and token counts. What the sessions say only if you let it below.
+          its project folder and git branch, where it ran, its models, times and token counts, and how many prompts, file changes, changed lines and commands it had. What the sessions say only if you let it below.
         </p>
 
         <div>

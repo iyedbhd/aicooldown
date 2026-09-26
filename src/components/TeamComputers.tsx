@@ -61,7 +61,7 @@ export function TeamComputers(props: Props) {
           <li>2. Sign in with {ws.team ? "your" : "this"} AI Cooldown account.</li>
           <li>
             3. Under <span className="text-fg-2">This machine</span>, press <span className="text-fg-2">Connect this computer</span>. It then reports which accounts its CLIs
-            use and its Claude Code and Codex sessions: when, in which folder, with which models, how many tokens. What they say stays there unless its owner
+            use and its Claude Code and Codex sessions: when, in which folder, with which models, how many tokens, prompts and changed lines. What they say stays there unless its owner
             turns on sharing.
           </li>
           <li>

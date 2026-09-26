@@ -1,4 +1,4 @@
-import type { DeviceActivity, ModelUsage, ProjectActivity, SessionActivity, TokenRow } from "../activity";
+import { NO_QUARTERS, QUARTERS_RE, type DeviceActivity, type ModelUsage, type ProjectActivity, type SessionActivity, type SessionWork, type TokenRow, type WorkRow } from "../activity";
 import type { CliProfile, HelloRun, HelloSchedule, ScheduleMode } from "../local";
 import { GRANT_NOTHING, MODEL_NAME, REMOTE_LEVELS, SESSION_ID, type Device, type DeviceInfo, type DeviceManage, type Grant, type RemoteLevel, type ShareLevel, type ToolState } from "../team";
 import { decrypt, encrypt, newId, openCompact, openJson, randomToken, sealCompact, sealJson, sha256 } from "./crypto";
@@ -146,6 +146,9 @@ const MAX_PROJECTS = 300;
 const MAX_ROWS = 500;
 /** Rows across all projects: a month of heavy use is a few thousand. */
 const MAX_TOTAL_ROWS = 20_000;
+/** A project's days of work, and all projects': a day each at most. */
+const MAX_WORK_ROWS = 100;
+const MAX_TOTAL_WORK_ROWS = 10_000;
 const MAX_SESSIONS = 300;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -163,12 +166,34 @@ function usageOf(x: Record<string, unknown>): ModelUsage {
   };
 }
 
+/** A day's work, checked; null for one that does not parse. */
+function workRowOf(x: Record<string, unknown>): WorkRow | null {
+  if (typeof x.day !== "string" || !DAY.test(x.day)) return null;
+  return {
+    day: x.day,
+    prompts: count(x.prompts),
+    edits: count(x.edits),
+    added: count(x.added),
+    removed: count(x.removed),
+    commands: count(x.commands),
+    quarters: typeof x.quarters === "string" && QUARTERS_RE.test(x.quarters) ? x.quarters : NO_QUARTERS,
+  };
+}
+
+/** A session's work, checked; undefined from a computer before 0.13, which does not report it. */
+function sessionWorkOf(raw: unknown): SessionWork | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const x = raw as Record<string, unknown>;
+  return { prompts: count(x.prompts), edits: count(x.edits), added: count(x.added), removed: count(x.removed), commands: count(x.commands), minutes: count(x.minutes) };
+}
+
 /** The sessions part of the report. Titles only come from a computer that says it shares them. */
 function parseSessions(raw: unknown, titles: boolean): SessionActivity[] {
   const sessions: SessionActivity[] = [];
   for (const x of objects(raw, MAX_SESSIONS)) {
     const path = text(x.path, 500);
     if (!path || (x.tool !== "claude" && x.tool !== "codex") || typeof x.id !== "string" || !SESSION_ID.test(x.id)) continue;
+    const work = sessionWorkOf(x.work);
     sessions.push({
       tool: x.tool,
       id: x.id,
@@ -181,6 +206,7 @@ function parseSessions(raw: unknown, titles: boolean): SessionActivity[] {
       lastActive: count(x.lastActive),
       usage: objects(x.usage, 20).map(usageOf),
       subagents: count(x.subagents),
+      ...(work && { work }),
     });
   }
   return sessions;
@@ -192,6 +218,7 @@ export function parseActivity(raw: unknown, titles: boolean): DeviceActivity | n
   const v = raw as Record<string, unknown>;
   const projects: ProjectActivity[] = [];
   let budget = MAX_TOTAL_ROWS;
+  let workBudget = MAX_TOTAL_WORK_ROWS;
   for (const q of objects(v.projects, MAX_PROJECTS)) {
     const path = text(q.path, 500);
     if (!path || (q.tool !== "claude" && q.tool !== "codex")) continue;
@@ -202,6 +229,9 @@ export function parseActivity(raw: unknown, titles: boolean): DeviceActivity | n
       if (typeof x.day !== "string" || !DAY.test(x.day)) continue;
       rows.push({ day: x.day, ...usageOf(x) });
     }
+    // A computer before 0.13 reports no work: none at all, rather than none done.
+    const days = Array.isArray(q.work) ? objects(q.work, Math.min(MAX_WORK_ROWS, workBudget)) : null;
+    if (days) workBudget -= days.length;
     projects.push({
       tool: q.tool,
       path,
@@ -210,6 +240,7 @@ export function parseActivity(raw: unknown, titles: boolean): DeviceActivity | n
       lastActive: count(q.lastActive),
       sessions: count(q.sessions),
       rows,
+      ...(days && { work: days.map(workRowOf).filter((w): w is WorkRow => w !== null) }),
     });
   }
   return { scannedAt: count(v.scannedAt), days: Math.min(count(v.days), 90), projects, sessions: parseSessions(v.sessions, titles) };

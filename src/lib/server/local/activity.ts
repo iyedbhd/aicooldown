@@ -3,7 +3,24 @@ import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { dayKey, lastDays, type DeviceActivity, type ModelUsage, type ProjectActivity, type SessionActivity, type Tool, type TokenRow } from "@/lib/activity";
+import {
+  countQuarters,
+  dayKey,
+  lastDays,
+  NO_QUARTERS,
+  orQuarters,
+  quarterOf,
+  withQuarter,
+  type DeviceActivity,
+  type ModelUsage,
+  type ProjectActivity,
+  type Quarters,
+  type SessionActivity,
+  type SessionWork,
+  type Tool,
+  type TokenRow,
+  type WorkRow,
+} from "@/lib/activity";
 import { DATA_DIR } from "@/lib/server/data-dir";
 import { livePlace } from "./cli";
 
@@ -14,9 +31,11 @@ import { livePlace } from "./cli";
  * git branch, the models and their token counts, its subagents (Codex's
  * sub-agent threads fold into the session that started them), and its title
  * (Claude Code's custom title or summary, Codex's thread name) or else its
- * first prompt (reported only from a computer that shares session content). The
- * rest of what sessions say is skipped over here; transcript.ts reads it on
- * request.
+ * first prompt (reported only from a computer that shares session content).
+ * Per day, how many prompts were typed, files changed (and lines added and
+ * removed, from the diffs the CLIs log) and commands run, and in which quarter
+ * hours anything happened. The rest of what sessions say is skipped over here;
+ * transcript.ts reads it on request.
  *
  * Logs run to gigabytes, so each file's summary is cached with its size and
  * modification time, and only files that changed are read again.
@@ -24,7 +43,7 @@ import { livePlace } from "./cli";
 
 const DAYS = 30;
 const CACHE_FILE = path.join(DATA_DIR, "activity-cache.json");
-const CACHE_VERSION = 5;
+const CACHE_VERSION = 6;
 /** Sessions reported, most recently active first. */
 const MAX_SESSIONS = 300;
 /** A title or first prompt is cut to this. */
@@ -36,14 +55,26 @@ const PROMPT_LINES = 400;
 /** input, output, cache writes, of which kept an hour, cache reads, replies */
 type Counts = [number, number, number, number, number, number];
 
+/** prompts, files changed, lines added, lines removed, commands, and the quarter hours with activity: a WorkRow's */
+type Work = [number, number, number, number, number, Quarters];
+type WorkCounts = Partial<Pick<WorkRow, "prompts" | "edits" | "added" | "removed" | "commands">>;
+
+/** What a log used, with rows keyed by `day \t model`, and what it did, by day. */
+type Tally = { rows: Record<string, Counts>; work: Record<string, Work> };
+
 /**
  * One log file: the folder its session started in (the CLIs also record where
  * each step ran, which wanders into subfolders), its session (a Claude Code
  * subagent's log carries its parent's; a Codex sub-agent's thread names the
- * thread that started it as `parent`), and what it used, with rows keyed by
- * `day \t model`.
+ * thread that started it as `parent`), and its tally.
+ *
+ * A Claude Code conversation can be in several logs: resuming or forking a
+ * session, or copying a chat to another account, writes what was said so far
+ * into a new log. Those logs share their first reply (`head`), and what the
+ * new log copied was written before it existed (`copied`): that counts only
+ * in the log it came from.
  */
-type FileSummary = {
+type FileSummary = Tally & {
   cwd: string | null;
   session: string | null;
   parent: string | null;
@@ -55,17 +86,50 @@ type FileSummary = {
   lastActive: number;
   title: string | null;
   prompt: string | null;
-  rows: Record<string, Counts>;
+  /** Its first reply, as message and request id. */
+  head: string | null;
+  /** What it had from before it existed; null when nothing. */
+  copied: Tally | null;
 };
-type Cache = { version: number; files: Record<string, { tool: Tool; size: number; mtimeMs: number; summary: FileSummary }> };
+type Cache = { version: number; files: Record<string, { tool: Tool; size: number; mtimeMs: number; bornMs: number; summary: FileSummary }> };
+
+/** A log's steps this much older than the log itself came from somewhere else; the first ones are written as the log is made. */
+const COPIED_MS = 5 * 60_000;
 
 const count = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
 const text = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
 const clip = (s: string) => (s.length > TITLE_MAX ? `${s.slice(0, TITLE_MAX - 1)}…` : s).replace(/\s+/g, " ").trim();
 
-const emptySummary = (): FileSummary => ({ cwd: null, session: null, parent: null, source: null, branch: null, model: null, startedAt: 0, lastActive: 0, title: null, prompt: null, rows: {} });
+const emptySummary = (): FileSummary => ({
+  cwd: null,
+  session: null,
+  parent: null,
+  source: null,
+  branch: null,
+  model: null,
+  startedAt: 0,
+  lastActive: 0,
+  title: null,
+  prompt: null,
+  head: null,
+  rows: {},
+  work: {},
+  copied: null,
+});
 
-function add(summary: FileSummary, at: number, branch: unknown, model: string, counts: Counts): void {
+/** Something happened at `at`: its quarter hour had activity, and `counts` add to its day. */
+function did(tally: Tally, at: number, counts: WorkCounts = {}): void {
+  const w = (tally.work[dayKey(at)] ??= [0, 0, 0, 0, 0, NO_QUARTERS]);
+  w[0] += counts.prompts ?? 0;
+  w[1] += counts.edits ?? 0;
+  w[2] += counts.added ?? 0;
+  w[3] += counts.removed ?? 0;
+  w[4] += counts.commands ?? 0;
+  w[5] = withQuarter(w[5], quarterOf(at));
+}
+
+/** A model reply at `at`, counted in `tally`. */
+function add(summary: FileSummary, tally: Tally, at: number, branch: unknown, model: string, counts: Counts): void {
   if (at >= summary.lastActive) {
     summary.lastActive = at;
     summary.model = model;
@@ -73,9 +137,30 @@ function add(summary: FileSummary, at: number, branch: unknown, model: string, c
   }
   if (!summary.startedAt || at < summary.startedAt) summary.startedAt = at;
   const key = `${dayKey(at)}\t${model}`;
-  const row = (summary.rows[key] ??= [0, 0, 0, 0, 0, 0]);
+  const row = (tally.rows[key] ??= [0, 0, 0, 0, 0, 0]);
   counts.forEach((n, i) => (row[i] += n));
+  did(tally, at);
 }
+
+/** How many lines a file's content has. */
+const lineCount = (content: string) => (content ? content.split("\n").length - (content.endsWith("\n") ? 1 : 0) : 0);
+
+/** The lines a unified diff adds and removes; file headers before its first hunk are not lines. */
+function diffLines(diff: string): [number, number] {
+  let added = 0;
+  let removed = 0;
+  let hunks = false;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("@@")) hunks = true;
+    else if (!hunks && (line.startsWith("+++") || line.startsWith("---"))) continue;
+    else if (line.startsWith("+")) added += 1;
+    else if (line.startsWith("-")) removed += 1;
+  }
+  return [added, removed];
+}
+
+/** Where what someone typed counts as a prompt: not the CLI's own context, nor its note that a reply was stopped. */
+const typed = (prompt: string) => !/^\s*(<|\[Request interrupted)/.test(prompt);
 
 function lines(file: string): readline.Interface {
   return readline.createInterface({ input: createReadStream(/* turbopackIgnore: true */ file), crlfDelay: Infinity });
@@ -112,13 +197,38 @@ export function codexPrompt(message: string): string {
   return (request ? request[1] : message).trim();
 }
 
+/** Claude Code's tools that run shell commands. */
+const COMMAND_TOOLS = new Set(["Bash", "PowerShell"]);
+
+/** The lines a Claude Code edit added and removed: its patch's hunks, or a new file's content. */
+function editLines(result: { type?: unknown; content?: unknown; structuredPatch: unknown[] }): [number, number] {
+  if (result.type === "create" && typeof result.content === "string") return [lineCount(result.content), 0];
+  let added = 0;
+  let removed = 0;
+  for (const hunk of result.structuredPatch) {
+    const hunkLines = (hunk as { lines?: unknown } | null)?.lines;
+    for (const line of Array.isArray(hunkLines) ? hunkLines : []) {
+      if (typeof line !== "string") continue;
+      if (line.startsWith("+")) added += 1;
+      else if (line.startsWith("-")) removed += 1;
+    }
+  }
+  return [added, removed];
+}
+
 /**
  * A Claude Code transcript: every model reply carries its usage. A reply is
  * written once per content block with the same usage, so each counts once.
+ * What someone typed is a prompt; an edit's result carries the patch it
+ * applied; a shell command is a tool call. What is older than the log (`born`,
+ * its creation time) was copied into it.
  */
-async function summarizeClaude(file: string): Promise<FileSummary> {
+async function summarizeClaude(file: string, born: number): Promise<FileSummary> {
   const summary = emptySummary();
   const seen = new Set<string>();
+  const commands = new Set<string>();
+  const from = born > 0 ? born - COPIED_MS : -Infinity;
+  const tally = (at: number): Tally => (at < from ? (summary.copied ??= { rows: {}, work: {} }) : summary);
   let n = 0;
   for await (const line of lines(file)) {
     n += 1;
@@ -134,56 +244,151 @@ async function summarizeClaude(file: string): Promise<FileSummary> {
       if (title) summary.title = clip(title);
       continue;
     }
-    if (summary.prompt === null && n <= PROMPT_LINES && line.includes('"type":"user"') && line.length < 200_000) {
+    // Tool output is skipped without parsing it, but for an edit's, which says what it changed.
+    const patched = line.includes('"structuredPatch"');
+    if (line.includes('"type":"user"') && (patched || !line.includes('"tool_result"'))) {
       const entry = parse(line);
-      const prompt = entry?.type === "user" ? claudePrompt(entry) : null;
-      if (prompt) summary.prompt = clip(prompt);
-      continue;
+      if (entry?.type === "user") {
+        const at = Date.parse(String(entry.timestamp));
+        const result = entry.toolUseResult as { type?: unknown; content?: unknown; structuredPatch?: unknown } | undefined;
+        if (patched && result && Array.isArray(result.structuredPatch)) {
+          const [added, removed] = editLines({ ...result, structuredPatch: result.structuredPatch });
+          if (!Number.isNaN(at)) did(tally(at), at, { edits: 1, added, removed });
+        } else {
+          const prompt = entry.isCompactSummary ? null : claudePrompt(entry);
+          if (prompt && typed(prompt)) {
+            if (summary.prompt === null && n <= PROMPT_LINES) summary.prompt = clip(prompt);
+            if (!Number.isNaN(at)) did(tally(at), at, { prompts: 1 });
+          }
+        }
+        continue;
+      }
     }
-    if (!line.includes('"usage"')) continue; // skips prompts and tool output without parsing them
+    if (!line.includes('"usage"')) continue; // skips the rest of what was said without parsing it
     const entry = parse(line);
-    const message = entry?.message as { id?: unknown; model?: unknown; usage?: Record<string, unknown> } | undefined;
+    const message = entry?.message as { id?: unknown; model?: unknown; usage?: Record<string, unknown>; content?: unknown } | undefined;
     if (entry?.type !== "assistant" || !message?.usage) continue;
+    const at = Date.parse(String(entry.timestamp));
+    if (Number.isNaN(at)) continue;
+    for (const block of Array.isArray(message.content) ? message.content : []) {
+      const b = block as { type?: unknown; id?: unknown; name?: unknown } | null;
+      if (b?.type !== "tool_use" || typeof b.id !== "string" || !COMMAND_TOOLS.has(String(b.name)) || commands.has(b.id)) continue;
+      commands.add(b.id);
+      did(tally(at), at, { commands: 1 });
+    }
     const model = typeof message.model === "string" ? message.model : "unknown";
     if (model === "<synthetic>") continue; // the CLI's own placeholder replies, never billed
     const key = message.id && entry.requestId ? `${message.id}:${entry.requestId}` : String(entry.uuid);
     if (seen.has(key)) continue;
     seen.add(key);
-    const at = Date.parse(String(entry.timestamp));
-    if (Number.isNaN(at)) continue;
+    summary.head ??= key;
     const u = message.usage;
     const cacheWrite = count(u.cache_creation_input_tokens);
     const hour = count((u.cache_creation as Record<string, unknown> | undefined)?.ephemeral_1h_input_tokens);
-    add(summary, at, entry.gitBranch, model, [count(u.input_tokens), count(u.output_tokens), cacheWrite, Math.min(hour, cacheWrite), count(u.cache_read_input_tokens), 1]);
+    add(summary, tally(at), at, entry.gitBranch, model, [count(u.input_tokens), count(u.output_tokens), cacheWrite, Math.min(hour, cacheWrite), count(u.cache_read_input_tokens), 1]);
   }
   return summary;
 }
 
 type CodexUsage = { input_tokens?: number; cached_input_tokens?: number; cache_write_input_tokens?: number; output_tokens?: number };
 
+/** Codex's tools that run shell commands, as its raw tool calls name them. */
+const SHELL_CALLS = new Set(["shell", "shell_command", "container.exec", "exec_command", "local_shell"]);
+
+/** What an apply_patch patch changes: a file per "*** Add/Update/Delete File:" header, and the lines its hunks add and remove. */
+function patchWork(patch: string): WorkCounts {
+  const counts = { edits: 0, added: 0, removed: 0 };
+  for (const line of patch.split("\n")) {
+    if (/^\*\*\* (Add|Update|Delete) File: /.test(line)) counts.edits += 1;
+    else if (line.startsWith("+")) counts.added += 1;
+    else if (line.startsWith("-")) counts.removed += 1;
+  }
+  return counts;
+}
+
+/** What a FileChange item changed: a file per change, with the lines its diff adds and removes, or all of a new or deleted file's. */
+function fileChangeWork(changes: unknown): WorkCounts {
+  const counts = { edits: 0, added: 0, removed: 0 };
+  const list: unknown[] = Array.isArray(changes) ? changes : changes && typeof changes === "object" ? Object.values(changes) : [];
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const change = raw as { type?: unknown; unified_diff?: unknown; content?: unknown };
+    counts.edits += 1;
+    if (typeof change.unified_diff === "string") {
+      const [added, removed] = diffLines(change.unified_diff);
+      counts.added += added;
+      counts.removed += removed;
+    } else if (typeof change.content === "string") {
+      if (change.type === "delete") counts.removed += lineCount(change.content);
+      else counts.added += lineCount(change.content);
+    }
+  }
+  return counts;
+}
+
+/** What a raw tool call did: applied a patch, ran a command, or neither. */
+function callWork(payload: Record<string, unknown>): WorkCounts | null {
+  if (payload.type === "custom_tool_call") return payload.name === "apply_patch" && typeof payload.input === "string" ? patchWork(payload.input) : null;
+  const args = payload.type === "local_shell_call" ? (payload.action as Record<string, unknown> | undefined) : parse(String(payload.arguments ?? ""));
+  if (payload.name === "apply_patch") return typeof args?.input === "string" ? patchWork(args.input) : null;
+  if (payload.type !== "local_shell_call" && !SHELL_CALLS.has(String(payload.name))) return null;
+  const command = Array.isArray(args?.command) ? args.command.join(" ") : typeof args?.command === "string" ? args.command : typeof args?.cmd === "string" ? args.cmd : "";
+  // apply_patch run as a command edits files.
+  return command.includes("*** Begin Patch") ? patchWork(command) : { commands: 1 };
+}
+
 /**
  * A Codex session: token_count events carry the session's running total, so
  * each request is the difference from the one before (which also makes
  * repeated events count once). Codex counts cached input, and cache writes,
- * inside input.
+ * inside input. Newer versions log each step as an item (what was typed, a
+ * command, a file change); older ones only the raw messages and tool calls,
+ * which newer ones log as well, so those count only in a log without items.
+ * A log in which Codex never ran a turn holds history it brought over from
+ * elsewhere, stamped when it did: nothing in it was done then.
  */
 async function summarizeCodex(file: string): Promise<FileSummary> {
   const summary = emptySummary();
   let model = "codex";
   let previous: CodexUsage | null = null;
+  let turns = false;
+  let items = false;
+  /** What the raw entries did, for a log that turns out to have no items. */
+  const raw: [number, WorkCounts][] = [];
+  /** Whether what was said at `at` is a prompt someone typed; the first is the session's title unless it has one. */
+  const prompted = (said: string, at: number): boolean => {
+    const prompt = codexPrompt(said);
+    if (!prompt || !typed(prompt)) return false;
+    summary.prompt ??= clip(prompt);
+    return !Number.isNaN(at);
+  };
   for await (const line of lines(file)) {
-    if (summary.prompt === null && (line.includes('"UserMessage"') || line.includes('"user_message"'))) {
-      const entry = parse(line);
-      const payload = entry?.payload as Record<string, unknown> | undefined;
-      const item = payload?.item as { type?: unknown; content?: { text?: unknown }[] } | undefined;
-      const said = item?.type === "UserMessage" ? (item.content ?? []).map((c) => (typeof c.text === "string" ? c.text : "")).join("\n") : payload?.type === "user_message" ? String(payload.message ?? "") : "";
-      if (said.trim()) summary.prompt = clip(codexPrompt(said));
-      continue;
-    }
-    if (!line.includes('"session_meta"') && !line.includes('"turn_context"') && !line.includes('"token_count"')) continue;
+    if (!items && line.includes('"item_completed"')) items = true;
+    const said = line.includes('"UserMessage"') || line.includes('"user_message"');
+    const step = line.includes('"CommandExecution"') || line.includes('"FileChange"');
+    const call = !items && (line.includes('"function_call"') || line.includes('"custom_tool_call"') || line.includes('"local_shell_call"'));
+    if (!said && !step && !call && !line.includes('"session_meta"') && !line.includes('"turn_context"') && !line.includes('"token_count"')) continue;
     const entry = parse(line);
     const payload = entry?.payload as Record<string, unknown> | undefined;
     if (!entry || !payload) continue;
+    const at = Date.parse(String(entry.timestamp));
+    if (payload.type === "item_completed") {
+      const item = payload.item as { type?: unknown; status?: unknown; content?: { text?: unknown }[]; changes?: unknown } | undefined;
+      if (item?.type === "UserMessage" && prompted((item.content ?? []).map((c) => (typeof c?.text === "string" ? c.text : "")).join("\n"), at)) did(summary, at, { prompts: 1 });
+      else if (Number.isNaN(at)) continue;
+      else if (item?.type === "CommandExecution") did(summary, at, { commands: 1 });
+      else if (item?.type === "FileChange" && item.status !== "failed" && item.status !== "declined") did(summary, at, fileChangeWork(item.changes));
+      continue;
+    }
+    if (payload.type === "user_message") {
+      if (prompted(String(payload.message ?? ""), at)) raw.push([at, { prompts: 1 }]);
+      continue;
+    }
+    if (call && entry.type === "response_item") {
+      const work = Number.isNaN(at) ? null : callWork(payload);
+      if (work) raw.push([at, work]);
+      continue;
+    }
     if (entry.type === "session_meta") {
       summary.cwd = text(payload.cwd);
       summary.session = text(payload.id) ?? text(payload.session_id);
@@ -196,6 +401,7 @@ async function summarizeCodex(file: string): Promise<FileSummary> {
       const started = Date.parse(String(payload.timestamp ?? entry.timestamp));
       if (!Number.isNaN(started)) summary.startedAt = started;
     } else if (entry.type === "turn_context") {
+      turns = true;
       if (typeof payload.model === "string") model = payload.model;
       summary.cwd ??= text(payload.cwd);
     } else if (payload.type === "token_count") {
@@ -206,14 +412,14 @@ async function summarizeCodex(file: string): Promise<FileSummary> {
       // A total that went down started over (a new context): all of it is new.
       const delta = keys.some((k) => diff(k) < 0) ? Object.fromEntries(keys.map((k) => [k, count(total[k])])) : Object.fromEntries(keys.map((k) => [k, diff(k)]));
       previous = total;
-      if (keys.every((k) => delta[k] === 0)) continue;
-      const at = Date.parse(String(entry.timestamp));
-      if (Number.isNaN(at)) continue;
+      if (keys.every((k) => delta[k] === 0) || Number.isNaN(at)) continue;
       const cached = Math.min(delta.cached_input_tokens, delta.input_tokens);
       const written = Math.min(delta.cache_write_input_tokens, delta.input_tokens - cached);
-      add(summary, at, summary.branch, model, [delta.input_tokens - cached - written, delta.output_tokens, written, 0, cached, 1]);
+      add(summary, summary, at, summary.branch, model, [delta.input_tokens - cached - written, delta.output_tokens, written, 0, cached, 1]);
     }
   }
+  if (!turns) summary.work = {};
+  else if (!items) for (const [at, counts] of raw) did(summary, at, counts);
   return summary;
 }
 
@@ -304,6 +510,26 @@ function addCounts(into: Map<string, Counts>, key: string, counts: Counts): void
   into.set(key, row);
 }
 
+/** A log's work on `day` added to what is there. The task a session hands a subagent (`own` false) is not a prompt anyone typed. */
+function addWork(into: Map<string, Work>, day: string, [prompts, edits, added, removed, commands, quarters]: Work, own: boolean): void {
+  const w = into.get(day) ?? [0, 0, 0, 0, 0, NO_QUARTERS];
+  into.set(day, [w[0] + (own ? prompts : 0), w[1] + edits, w[2] + added, w[3] + removed, w[4] + commands, orQuarters(w[5], quarters)]);
+}
+
+/** A session's work over its days, each quarter hour with any activity counting 15 minutes. */
+function sessionWork(days: Map<string, Work>): SessionWork {
+  const total: SessionWork = { prompts: 0, edits: 0, added: 0, removed: 0, commands: 0, minutes: 0 };
+  for (const [prompts, edits, added, removed, commands, quarters] of days.values()) {
+    total.prompts += prompts;
+    total.edits += edits;
+    total.added += added;
+    total.removed += removed;
+    total.commands += commands;
+    total.minutes += countQuarters(quarters) * 15;
+  }
+  return total;
+}
+
 export type Scan = {
   activity: DeviceActivity;
   /** Each reported project's folder on disk, by the path the team sees: remote sessions run there. */
@@ -330,20 +556,22 @@ export async function scanActivity(): Promise<Scan> {
    * subagents' included, in one folder under projects/; a Codex session
    * belongs where it started.
    */
-  const groups = new Map<string, { tool: Tool; files: { file: string; depth: number; summary: FileSummary }[] }>();
+  const groups = new Map<string, { tool: Tool; files: { file: string; depth: number; born: number; summary: FileSummary }[] }>();
   for (const { tool, dir } of sources) {
     for (const file of await logsUnder(dir, since)) {
       const info = await stat(file).catch(() => null);
       if (!info) continue;
+      // When the log was made; 0 where the file system does not say.
+      const born = info.birthtimeMs > 0 ? info.birthtimeMs : 0;
       const hit = cache.files[file];
-      const fresh = hit && hit.tool === tool && hit.size === info.size && hit.mtimeMs === info.mtimeMs;
-      const summary = fresh ? hit.summary : await (tool === "claude" ? summarizeClaude(file) : summarizeCodex(file)).catch(emptySummary);
-      next.files[file] = { tool, size: info.size, mtimeMs: info.mtimeMs, summary };
+      const fresh = hit && hit.tool === tool && hit.size === info.size && hit.mtimeMs === info.mtimeMs && hit.bornMs === born;
+      const summary = fresh ? hit.summary : await (tool === "claude" ? summarizeClaude(file, born) : summarizeCodex(file)).catch(emptySummary);
+      next.files[file] = { tool, size: info.size, mtimeMs: info.mtimeMs, bornMs: born, summary };
       const parts = path.relative(dir, file).split(path.sep);
       if (tool === "codex" && !summary.cwd) continue;
       const key = tool === "claude" ? `claude\n${parts[0]}` : `codex\n${path.normalize(summary.cwd!)}`;
       const group = groups.get(key) ?? { tool, files: [] };
-      group.files.push({ file, depth: parts.length, summary });
+      group.files.push({ file, depth: parts.length, born, summary });
       groups.set(key, group);
     }
   }
@@ -352,7 +580,7 @@ export async function scanActivity(): Promise<Scan> {
   const folders = new Map<string, string>();
   const logs = new Map<string, string>();
   const projects: ProjectActivity[] = [];
-  type SessionSum = Omit<SessionActivity, "usage"> & { models: Map<string, Counts> };
+  type SessionSum = Omit<SessionActivity, "usage" | "work"> & { models: Map<string, Counts>; work: Map<string, Work> };
   const sessions = new Map<string, SessionSum>();
   // A Codex sub-agent's thread counts in the session it was started from, as a Claude Code subagent's log does: the first thread up the chain.
   const parents = new Map<string, string>();
@@ -373,20 +601,28 @@ export async function scanActivity(): Promise<Scan> {
     let branch: string | null = null;
     let lastActive = 0;
     const rows = new Map<string, Counts>();
+    const work = new Map<string, Work>();
     const ids = new Set<string>();
+    // Of the logs sharing a first reply, the oldest has what the others copied from it.
+    const origin = new Map<string, string>();
+    for (const f of [...files].sort((x, y) => x.born - y.born || (x.file < y.file ? -1 : 1))) if (f.summary.head && !origin.has(f.summary.head)) origin.set(f.summary.head, f.file);
     for (const { file, depth, summary } of files) {
       if (summary.lastActive >= lastActive) {
         lastActive = summary.lastActive;
         branch = summary.branch ?? branch;
       }
-      for (const [key, counts] of Object.entries(summary.rows)) addCounts(rows, key, counts);
-      if (!summary.session) continue;
-      const id = tool === "codex" ? rootOf(summary.session) : summary.session;
+      const tallies: Tally[] = summary.copied && (!summary.head || origin.get(summary.head) === file) ? [summary, summary.copied] : [summary];
+      for (const t of tallies) for (const [key, counts] of Object.entries(t.rows)) addCounts(rows, key, counts);
+      const id = summary.session && (tool === "codex" ? rootOf(summary.session) : summary.session);
+      // The session's own log, or one of its subagents'.
+      const own = !id || (tool === "codex" ? id === summary.session : depth <= 2);
+      for (const t of tallies) for (const [day, w] of Object.entries(t.work)) addWork(work, day, w, own);
+      if (!id) continue;
       ids.add(id);
-      const own = tool === "codex" ? id === summary.session : depth <= 2;
       const key = `${tool}:${id}`;
-      const s: SessionSum = sessions.get(key) ?? { tool, id, path: shown, title: null, branch: null, source: null, model: null, startedAt: 0, lastActive: 0, subagents: 0, models: new Map() };
+      const s: SessionSum = sessions.get(key) ?? { tool, id, path: shown, title: null, branch: null, source: null, model: null, startedAt: 0, lastActive: 0, subagents: 0, models: new Map(), work: new Map() };
       sessions.set(key, s);
+      for (const t of tallies) for (const [day, w] of Object.entries(t.work)) addWork(s.work, day, w, own);
       if (own) {
         logs.set(key, file);
         s.path = shown; // a sub-agent may have started elsewhere: the session is where its own log says
@@ -399,14 +635,18 @@ export async function scanActivity(): Promise<Scan> {
         s.lastActive = summary.lastActive;
         s.branch = summary.branch ?? s.branch;
       }
-      for (const [key2, counts] of Object.entries(summary.rows)) addCounts(s.models, key2.split("\t")[1], counts);
+      for (const t of tallies) for (const [key2, counts] of Object.entries(t.rows)) addCounts(s.models, key2.split("\t")[1], counts);
     }
     const kept: TokenRow[] = rowsOf(rows)
       .filter((r) => r.day >= days[0])
       .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.model < b.model ? -1 : 1));
     if (kept.length === 0) continue;
     folders.set(shown, cwd);
-    projects.push({ tool, path: shown, name: path.basename(cwd) || shown, branch, lastActive, sessions: ids.size, rows: kept });
+    const workDays: WorkRow[] = [...work]
+      .filter(([day]) => day >= days[0])
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([day, [prompts, edits, added, removed, commands, quarters]]) => ({ day, prompts, edits, added, removed, commands, quarters }));
+    projects.push({ tool, path: shown, name: path.basename(cwd) || shown, branch, lastActive, sessions: ids.size, rows: kept, work: workDays });
   }
   projects.sort((a, b) => b.lastActive - a.lastActive);
 
@@ -414,6 +654,10 @@ export async function scanActivity(): Promise<Scan> {
     .filter((s) => s.lastActive >= since && folders.has(s.path))
     .sort((a, b) => b.lastActive - a.lastActive)
     .slice(0, MAX_SESSIONS)
-    .map(({ models, ...s }) => ({ ...s, usage: [...models].map(([model, [input, output, cacheWrite, cacheWrite1h, cacheRead, messages]]): ModelUsage => ({ model, input, output, cacheWrite, cacheWrite1h, cacheRead, messages })) }));
+    .map(({ models, work: byDay, ...s }) => ({
+      ...s,
+      usage: [...models].map(([model, [input, output, cacheWrite, cacheWrite1h, cacheRead, messages]]): ModelUsage => ({ model, input, output, cacheWrite, cacheWrite1h, cacheRead, messages })),
+      work: sessionWork(byDay),
+    }));
   return { activity: { scannedAt: now, days: DAYS, projects, sessions: reported }, folders, logs };
 }

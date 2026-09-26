@@ -20,6 +20,8 @@ type Props = {
   flash: (text: string) => void;
   onOpenSession: (key: string) => void;
   onShowSessions: (only: Partial<SessionFilter>) => void;
+  /** The Analytics tab, about one person. */
+  onShowAnalytics: (person: string) => void;
 };
 
 /** A person's latest sessions shown in their details. */
@@ -28,7 +30,7 @@ const RECENT_SESSIONS = 5;
 const input = "rounded-lg border border-line bg-panel-2 px-3 py-1.5 text-sm text-fg placeholder:text-faint focus:border-muted focus:outline-none";
 
 /** Everyone in the workspace, what each of them uses, and (for owners and admins) inviting and managing people. */
-export function TeamPeople({ ws, sessions, period, now, reload, flash, onOpenSession, onShowSessions }: Props) {
+export function TeamPeople({ ws, sessions, period, now, reload, flash, onOpenSession, onShowSessions, onShowAnalytics }: Props) {
   const [open, setOpen] = useState<string | null>(ws.members.length === 1 ? ws.members[0].id : null);
   const since = lastDays(period, now)[0];
 
@@ -98,7 +100,18 @@ export function TeamPeople({ ws, sessions, period, now, reload, flash, onOpenSes
                   )}
                 </button>
                 {expanded && (
-                  <MemberDetail ws={ws} member={m} sessions={theirs} since={since} now={now} reload={reload} flash={flash} onOpenSession={onOpenSession} onShowSessions={onShowSessions} />
+                  <MemberDetail
+                    ws={ws}
+                    member={m}
+                    sessions={theirs}
+                    since={since}
+                    now={now}
+                    reload={reload}
+                    flash={flash}
+                    onOpenSession={onOpenSession}
+                    onShowSessions={onShowSessions}
+                    onShowAnalytics={onShowAnalytics}
+                  />
                 )}
               </li>
             );
@@ -121,7 +134,7 @@ function Stat({ label, value, tone, title }: { label: string; value: string; ton
 
 type DetailProps = Omit<Props, "period"> & { member: Member; since: string };
 
-function MemberDetail({ ws, member, sessions, since, now, reload, flash, onOpenSession, onShowSessions }: DetailProps) {
+function MemberDetail({ ws, member, sessions, since, now, reload, flash, onOpenSession, onShowSessions, onShowAnalytics }: DetailProps) {
   const [busy, setBusy] = useState(false);
   const projects = rollupProjects([member], since).slice(0, 6);
   const isMe = member.id === ws.me.id;
@@ -216,9 +229,14 @@ function MemberDetail({ ws, member, sessions, since, now, reload, flash, onOpenS
         <div>
           <div className="mb-1 flex items-center justify-between gap-2">
             <p className="eyebrow">latest sessions</p>
-            <button type="button" onClick={() => onShowSessions({ person: member.id })} className="text-[11px] text-muted hover:text-fg">
-              all {sessions.length} →
-            </button>
+            <span className="flex items-center gap-3">
+              <button type="button" onClick={() => onShowAnalytics(member.id)} className="text-[11px] text-muted hover:text-fg">
+                analytics →
+              </button>
+              <button type="button" onClick={() => onShowSessions({ person: member.id })} className="text-[11px] text-muted hover:text-fg">
+                all {sessions.length} →
+              </button>
+            </span>
           </div>
           <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-panel">
             {sessions.slice(0, RECENT_SESSIONS).map((s) => (
@@ -358,8 +376,9 @@ function InviteCard({ ws, now, reload, flash }: { ws: Workspace; now: number; re
         )}
         <p className="text-[11px] text-faint">
           A member shows the owner and admins all their work: their connected computers, every Claude Code and Codex session there with its title and
-          conversation (when, where, which models, how many tokens), their projects and account limits, and the owner and admins start and continue sessions on
-          their computers where they allow it. An admin shows the owner and other admins their computers and limits, and only the projects and chats they share.
+          conversation (when, where, which models, how many tokens, prompts, changed lines and commands), their projects and account limits, and the owner and
+          admins start and continue sessions on their computers where they allow it. An admin shows the owner and other admins their computers and limits, and
+          only the projects and chats they share.
           Everyone shares projects and chats with the people they pick.
           Never account credentials.
         </p>

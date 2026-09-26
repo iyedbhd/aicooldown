@@ -101,6 +101,9 @@ export const lastActive = (projects: ProjectActivity[]) => projects.reduce((max,
 
 export type DayPoint = { day: string } & Record<Tool, number> & { cost: number };
 
+/** One stack of a chart over days: a tool's, a person's. */
+export type Series = { key: string; label: string; color: string; values: number[] };
+
 /** Tokens per day, by tool, on each of `days`. */
 export function dailySeries(projects: ProjectActivity[], days: string[]): DayPoint[] {
   const points = new Map(days.map((day) => [day, { day, claude: 0, codex: 0, cost: 0 }]));

@@ -26,6 +26,7 @@ import { ChatPanel, type ChatTarget } from "./ChatPanel";
 import { Icon } from "./Icon";
 import { Mark, Wordmark } from "./Logo";
 import { RefreshButton, useRefresh } from "./RefreshButton";
+import { TeamAnalytics } from "./TeamAnalytics";
 import { RoleBadge } from "./TeamBits";
 import { TeamComputers } from "./TeamComputers";
 import { TeamOverview } from "./TeamOverview";
@@ -34,10 +35,11 @@ import { TeamProjects } from "./TeamProjects";
 import { NO_FILTER, TeamSessions, type SessionFilter } from "./TeamSessions";
 import { ThemeToggle } from "./ThemeToggle";
 
-type Tab = "overview" | "people" | "computers" | "projects" | "sessions";
+type Tab = "overview" | "analytics" | "people" | "computers" | "projects" | "sessions";
 
 const TABS: { id: Tab; label: string; icon: Parameters<typeof Icon>[0]["name"] }[] = [
   { id: "overview", label: "Overview", icon: "gauge" },
+  { id: "analytics", label: "Analytics", icon: "trend" },
   { id: "people", label: "People", icon: "users" },
   { id: "computers", label: "Computers", icon: "monitor" },
   { id: "projects", label: "Projects", icon: "folder" },
@@ -138,6 +140,8 @@ export function TeamConsole() {
   /** The conversation open in the chat. */
   const [chat, setChat] = useState<ChatTarget | null>(null);
   const [filter, setFilter] = useState<SessionFilter>(NO_FILTER);
+  /** Whom the Analytics tab is about: "all", or a person's id. */
+  const [analyticsPerson, setAnalyticsPerson] = useState("all");
   const [showAuth, setShowAuth] = useState(false);
   const [creating, setCreating] = useState(false);
   const [teamName, setTeamName] = useState("");
@@ -160,6 +164,7 @@ export function TeamConsole() {
       setWs(null);
       setLoadedAt(null);
       setFilter(NO_FILTER);
+      setAnalyticsPerson("all");
       setChat(null);
     }
     scopeRef.current = next;
@@ -285,6 +290,12 @@ export function TeamConsole() {
   function showSessions(only: Partial<SessionFilter> = {}) {
     setFilter({ ...NO_FILTER, ...only });
     setTab("sessions");
+  }
+
+  /** The Analytics tab, about one person. */
+  function showAnalytics(person: string) {
+    setAnalyticsPerson(person);
+    setTab("analytics");
   }
 
   const openRun = (id: string) => setChat({ kind: "run", id });
@@ -520,8 +531,29 @@ export function TeamConsole() {
                 onShowComputers={() => setTab("computers")}
               />
             )}
+            {ws && tab === "analytics" && (
+              <TeamAnalytics
+                ws={ws}
+                period={period}
+                now={now}
+                person={analyticsPerson}
+                onPerson={setAnalyticsPerson}
+                onShowSessions={showSessions}
+                onShowComputers={() => setTab("computers")}
+              />
+            )}
             {ws && tab === "people" && (
-              <TeamPeople ws={ws} sessions={sessions} period={period} now={now} reload={reload} flash={flash} onOpenSession={openSession} onShowSessions={showSessions} />
+              <TeamPeople
+                ws={ws}
+                sessions={sessions}
+                period={period}
+                now={now}
+                reload={reload}
+                flash={flash}
+                onOpenSession={openSession}
+                onShowSessions={showSessions}
+                onShowAnalytics={showAnalytics}
+              />
             )}
             {ws && tab === "computers" && (
               <TeamComputers ws={ws} sessions={sessions} period={period} now={now} reload={reload} flash={flash} onNewChat={newChat} onShowSessions={showSessions} />

@@ -44,6 +44,23 @@
   --faint: #5c6070;
   --accent: #67e8f9;
   --grid: rgba(255, 255, 255, 0.055);
+  /*
+   * Chart series, one per person, in this order and never cycled (with more
+   * than eight people, the eighth on share "other"): eight hues checked as
+   * neighbours against --panel for lightness, chroma, colour-blind separation
+   * and contrast. --heat is the one hue that grows out of the panel for
+   * "more" (the activity heatmap).
+   */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --series-other: #6b7080;
+  --heat: #6da7ec;
 }
 
 :root[data-theme="light"] {
@@ -60,6 +77,17 @@
   --faint: #8b91a0;
   --accent: #0e7490;
   --grid: rgba(15, 17, 21, 0.07);
+  /* The same hues, stepped for the light panel; three sit under 3:1 on it, so the charts carry values as text too. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --series-other: #8b91a0;
+  --heat: #1c5cab;
 }
 
 body {

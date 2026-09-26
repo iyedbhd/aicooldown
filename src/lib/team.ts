@@ -128,6 +128,9 @@ export const CHAT_VERSION = "0.6.0";
 /** The version that knows what its owner shares, so their teams' owners and admins may continue its own sessions. */
 export const SHARING_VERSION = "0.7.0";
 
+/** The version that reports prompts, file changes, commands and when they happened (WorkRow). */
+export const WORK_VERSION = "0.13.0";
+
 /** Whether version `v` (x.y.z) is `min` or later. */
 export function versionAtLeast(v: string, min: string): boolean {
   const a = v.split(".").map((n) => Number.parseInt(n, 10) || 0);

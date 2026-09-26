@@ -93,9 +93,9 @@ export function JoinTeam({ token }: { token: string }) {
                 <>
                   <ul className="mt-2 list-disc space-y-1 pl-5 text-[13px] text-muted">
                     <li>the computers you connect, and which accounts their Claude Code and Codex CLIs use</li>
-                    <li>every Claude Code and Codex session there: its project and branch, when and where it ran, its models and tokens</li>
+                    <li>every Claude Code and Codex session there: its project and branch, when and where it ran, its models and tokens, how many prompts it took and lines it changed</li>
                     <li>what those sessions say: their titles and conversations, which they can also continue</li>
-                    <li>the projects you work on there, with token counts per day and model</li>
+                    <li>the projects you work on there: per day, the tokens by model, how many prompts, file changes, changed lines and commands, and the quarter hours with any of it (counts and times, not what was said or changed)</li>
                     <li>the limits of the Claude and Codex accounts linked to your AI Cooldown account</li>
                     <li>remote Claude Code and Codex sessions on your computers, which they can start only where you allow it</li>
                   </ul>

@@ -3,7 +3,8 @@ import { costOf } from "./pricing";
 /*
  * What a connected computer reports about the work its Claude Code and Codex
  * CLIs did, read from their own session logs there (server/local/activity.ts):
- * per project, per day and model, how many tokens went where, and each
+ * per project, per day and model, how many tokens went where; per project and
+ * day, how many prompts, file changes and commands, and when; and each
  * session. Session titles only from a computer that shares session content;
  * never prompts, code or replies (a shared session's conversation travels
  * separately, when asked for: server/transcripts.ts).
@@ -25,6 +26,36 @@ export type TokenRow = {
   messages: number;
 };
 
+/**
+ * The quarter hours of a day with any activity, in the computer's own time: 96
+ * bits as 24 hex digits, one digit per hour, its top bit the hour's first
+ * quarter. "8000…" is 00:00-00:15.
+ */
+export type Quarters = string;
+
+/**
+ * What a project's sessions did on one day besides reading and writing
+ * tokens. Counts and times only, never what was said or changed.
+ */
+export type WorkRow = {
+  /** YYYY-MM-DD, in the computer's own time zone. */
+  day: string;
+  /** Prompts people typed: not the CLI's own messages, nor the tasks a session hands its subagents. */
+  prompts: number;
+  /** Files changed: one for each file an edit, write or patch touched. */
+  edits: number;
+  /** Lines those changes added and removed. */
+  added: number;
+  removed: number;
+  /** Shell commands run. */
+  commands: number;
+  /** When any of that, or a model reply, happened. */
+  quarters: Quarters;
+};
+
+/** A session's work over all of its days: WorkRow's counts, and its minutes with activity (a quarter hour with any counts 15). */
+export type SessionWork = Omit<WorkRow, "day" | "quarters"> & { minutes: number };
+
 export type ProjectActivity = {
   tool: Tool;
   /** The project's folder, with the home folder as ~ and forward slashes. */
@@ -35,6 +66,8 @@ export type ProjectActivity = {
   lastActive: number;
   sessions: number;
   rows: TokenRow[];
+  /** Its days' work; undefined from a computer running AI Cooldown before 0.13, which does not report it. */
+  work?: WorkRow[];
 };
 
 /** A model's tokens over a whole session. */
@@ -59,6 +92,8 @@ export type SessionActivity = {
   usage: ModelUsage[];
   /** Subagents it started (Claude Code), each with a transcript of its own. */
   subagents: number;
+  /** What it did, its subagents included; undefined from a computer before 0.13. */
+  work?: SessionWork;
 };
 
 export type DeviceActivity = {
@@ -114,6 +149,37 @@ export function lastDays(count: number, now: number): string[] {
 export function rowsSince(projects: ProjectActivity[], since: string): TokenRow[] {
   return projects.flatMap((p) => p.rows.filter((r) => r.day >= since));
 }
+
+export const NO_QUARTERS: Quarters = "0".repeat(24);
+
+export const QUARTERS_RE = /^[0-9a-f]{24}$/;
+
+/** The quarter hour of the local day `ms` falls in: 0 for 00:00-00:15, 95 for 23:45-24:00. */
+export function quarterOf(ms: number): number {
+  const d = new Date(ms);
+  return d.getHours() * 4 + Math.floor(d.getMinutes() / 15);
+}
+
+/** `quarters` with quarter `q` set. */
+export function withQuarter(quarters: Quarters, q: number): Quarters {
+  const i = q >> 2;
+  return quarters.slice(0, i) + (parseInt(quarters[i], 16) | (8 >> (q & 3))).toString(16) + quarters.slice(i + 1);
+}
+
+/** The quarters set in either. */
+export function orQuarters(a: Quarters, b: Quarters): Quarters {
+  let out = "";
+  for (let i = 0; i < 24; i++) out += (parseInt(a[i], 16) | parseInt(b[i], 16)).toString(16);
+  return out;
+}
+
+const BITS = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4];
+
+/** How many quarters of each hour are set, 0 to 4. */
+export const quartersByHour = (quarters: Quarters): number[] => [...quarters].map((digit) => BITS[parseInt(digit, 16)]);
+
+/** How many quarters are set. */
+export const countQuarters = (quarters: Quarters): number => quartersByHour(quarters).reduce((n, q) => n + q, 0);
 
 /** "1.2M", "84k", "950". */
 export function formatTokens(n: number): string {
