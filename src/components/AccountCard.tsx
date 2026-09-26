@@ -1,17 +1,21 @@
 "use client";
 
 import { useState } from "react";
+import { useDesktop } from "@/lib/desktop";
 import { formatAgo, formatCountdown, formatMoney, formatPlan } from "@/lib/format";
-import { monthlyPrice } from "@/lib/spend";
 import type { Sample } from "@/lib/history";
+import { setMuted, useNotifyPrefs } from "@/lib/notify";
+import { monthlyPrice } from "@/lib/spend";
 import type { Account } from "@/lib/types";
+import { isEditable } from "@/lib/ui";
 import type { UsageState } from "@/lib/usage-client";
 import { Icon } from "./Icon";
+import { Menu, type MenuAnchor, type MenuItem } from "./Menu";
 import { PROVIDER_META, ProviderTile } from "./ProviderLogo";
 import { WindowRow } from "./WindowRow";
 
-function tokenStatus(account: Account, now: number, synced: boolean): { text: string; warn: boolean } {
-  const where = synced ? "synced" : "this browser";
+function tokenStatus(account: Account, now: number, synced: boolean, desktop: boolean): { text: string; warn: boolean } {
+  const where = synced ? "synced" : desktop ? "this app" : "this browser";
   if (account.owned) return { text: `signed in · auto-refresh · ${where}`, warn: false };
   if (account.expiresAt === undefined) return { text: `imported token · ${where}`, warn: false };
   const left = account.expiresAt - now;
@@ -28,17 +32,21 @@ type Props = {
   onRefresh: () => void;
   onRemove: () => void;
   onRename: (label: string) => void;
+  onCopy?: () => void;
 };
 
-export function AccountCard({ account, state, history, now, synced, onRefresh, onRemove, onRename }: Props) {
+export function AccountCard({ account, state, history, now, synced, onRefresh, onRemove, onRename, onCopy }: Props) {
   const meta = PROVIDER_META[account.provider];
   const usage = state?.usage;
   const loading = !state || state.status === "loading";
-  const token = tokenStatus(account, now, synced);
+  const desktop = useDesktop();
+  const token = tokenStatus(account, now, synced, desktop);
   const plan = formatPlan(account.plan ?? usage?.plan);
   const price = monthlyPrice(account.provider, account.plan ?? usage?.plan);
   const rateLimited = state?.rateLimitedUntil !== undefined && state.rateLimitedUntil > now;
   const [draft, setDraft] = useState<string | null>(null);
+  const [menu, setMenu] = useState<MenuAnchor | null>(null);
+  const muted = useNotifyPrefs().muted.includes(account.id);
 
   function commitRename() {
     const next = draft?.trim();
@@ -46,8 +54,24 @@ export function AccountCard({ account, state, history, now, synced, onRefresh, o
     setDraft(null);
   }
 
+  const actions: MenuItem[] = [
+    { label: "Refresh", icon: "refresh", disabled: loading, run: onRefresh },
+    { label: "Rename", icon: "pencil", run: () => setDraft(account.label) },
+    ...(onCopy ? [{ label: "Copy status", icon: "copy" as const, run: onCopy }] : []),
+    { label: muted ? "Unmute notifications" : "Mute notifications", icon: muted ? "bell" : "bellOff", run: () => setMuted(account.id, !muted) },
+    "separator",
+    { label: "Remove", icon: "trash", danger: true, run: onRemove },
+  ];
+
+  // In the desktop app a right-click opens the same menu, unless text is selected (then the system's Copy) or Shift is held.
+  function onContextMenu(e: React.MouseEvent) {
+    if (!desktop || e.shiftKey || isEditable(e.target) || window.getSelection()?.toString()) return;
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY });
+  }
+
   return (
-    <section className="fade-in flex flex-col rounded-2xl border border-line bg-panel shadow-sm transition-shadow hover:shadow-md">
+    <section onContextMenu={onContextMenu} className="fade-in flex flex-col rounded-2xl border border-line bg-panel shadow-sm transition-shadow hover:shadow-md">
       <header className="flex items-start gap-3 border-b border-line px-4 py-3">
         <ProviderTile provider={account.provider} size={40} className="mt-0.5" />
         <div className="min-w-0 flex-1">
@@ -66,12 +90,19 @@ export function AccountCard({ account, state, history, now, synced, onRefresh, o
             )}
           </div>
           {draft === null ? (
-            <button type="button" onClick={() => setDraft(account.label)} className="group mt-0.5 flex max-w-full items-center gap-1.5 text-left" title="Rename">
-              <span className="truncate text-base font-semibold text-fg">{account.label}</span>
-              <span className="shrink-0 text-[11px] text-faint opacity-0 transition-opacity group-hover:opacity-100" aria-hidden>
-                edit
-              </span>
-            </button>
+            <div className="mt-0.5 flex max-w-full items-center gap-1.5">
+              <button type="button" onClick={() => setDraft(account.label)} className="group flex min-w-0 items-center gap-1.5 text-left" title="Rename">
+                <span className="truncate text-base font-semibold text-fg">{account.label}</span>
+                <span className="shrink-0 text-[11px] text-faint opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden>
+                  edit
+                </span>
+              </button>
+              {muted && (
+                <span className="shrink-0 text-faint" title="Notifications about this account are muted">
+                  <Icon name="bellOff" size={12} />
+                </span>
+              )}
+            </div>
           ) : (
             <input
               autoFocus
@@ -93,10 +124,19 @@ export function AccountCard({ account, state, history, now, synced, onRefresh, o
           <button type="button" onClick={onRefresh} disabled={loading} className="rounded-lg p-1.5 text-muted transition hover:bg-panel-3 hover:text-fg disabled:opacity-40" aria-label="Refresh usage" title="Refresh">
             <Icon name="refresh" size={15} className={loading ? "spin" : undefined} />
           </button>
-          <button type="button" onClick={onRemove} className="rounded-lg p-1.5 text-muted transition hover:bg-rose-500/15 hover:text-rose-500" aria-label="Remove account" title="Remove">
-            <Icon name="trash" size={15} />
+          <button
+            type="button"
+            onClick={(e) => setMenu(menu ? null : { element: e.currentTarget })}
+            aria-haspopup="menu"
+            aria-expanded={menu !== null}
+            className="rounded-lg p-1.5 text-muted transition hover:bg-panel-3 hover:text-fg"
+            aria-label={`More actions for ${account.label}`}
+            title="More"
+          >
+            <Icon name="more" size={15} strokeWidth={3} />
           </button>
         </div>
+        {menu && <Menu anchor={menu} items={actions} onClose={() => setMenu(null)} label={`${account.label} actions`} />}
       </header>
 
       <div className="divide-y divide-line px-4">

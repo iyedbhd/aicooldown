@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { formatAgo, formatCountdown, formatDateTime, formatPlan } from "@/lib/format";
-import { fetchLocalState, localAction, type CliProfile, type LocalAction, type LocalState, type ScheduleMode } from "@/lib/local";
-import { notifyIfEnabled } from "@/lib/notify";
+import { localAction, type CliProfile, type LocalAction, type LocalState, type ScheduleMode } from "@/lib/local";
+import { reloadLocalState, showLocalState, useLocalState, watchLocalState } from "@/lib/local-watch";
 import type { SessionUser } from "@/lib/session";
-import { TOOL_NAME } from "@/lib/team";
 import type { Provider } from "@/lib/types";
+import { confirmAction, toast } from "@/lib/ui";
 import { DesktopApp } from "./DesktopApp";
 import { DevicePanel } from "./DevicePanel";
 import { Icon } from "./Icon";
@@ -23,7 +23,6 @@ const LOGIN_HINT: Record<Provider, string> = {
   codex: "To add another account, run `codex login` with it, then save it here. Do not `codex logout` first: that can revoke the saved login.",
 };
 const MODE_LABEL: Record<ScheduleMode, string> = { reset: "at next reset", "every-reset": "after every reset", at: "at a time" };
-const REFRESH_MS = 30_000;
 
 /** A `datetime-local` value one hour from now, in local time. */
 function inAnHour(): string {
@@ -37,62 +36,26 @@ function inAnHour(): string {
  * Switches which saved login each CLI uses, and says hello through the CLI to
  * start a login's 5-hour window now or on a schedule.
  */
-export function LocalPanel({ now, user, onNote }: { now: number; user: SessionUser | null; onNote: (text: string) => void }) {
+export function LocalPanel({ now, user }: { now: number; user: SessionUser | null }) {
   /** undefined until the first answer, null when this copy does not run on the user's computer. */
-  const [state, setState] = useState<LocalState | null | undefined>(undefined);
+  const state = useLocalState();
   const [busy, setBusy] = useState<string | null>(null);
-  /** Remote sessions already seen, so each new one someone else starts here is announced once. */
-  const seenRuns = useRef<Set<string> | null>(null);
 
-  const show = useCallback((next: LocalState) => {
-    const ids = next.device.recent.map((r) => r.id);
-    if (seenRuns.current) {
-      for (const r of next.device.recent) {
-        if (seenRuns.current.has(r.id) || r.by === next.device.owner?.email) continue;
-        notifyIfEnabled(`A remote ${TOOL_NAME[r.tool]} session started on this computer`, `${r.by ?? "Someone"}: ${r.prompt.slice(0, 140)}`, `run:${r.id}`);
-      }
+  // Scheduled hellos and remote sessions run on the server; this picks up their results (lib/local-watch.ts). Nothing is polled on the website.
+  useEffect(() => watchLocalState(), []);
+
+  const run = useCallback(async (key: string, body: LocalAction, done?: string) => {
+    setBusy(key);
+    const res = await localAction(body);
+    setBusy(null);
+    if (res.ok) {
+      showLocalState(res.data);
+      if (done) toast(done);
+    } else {
+      toast(res.error, { tone: "error" });
+      void reloadLocalState();
     }
-    seenRuns.current = new Set(ids);
-    setState(next);
   }, []);
-
-  // A failed refresh keeps what is on screen.
-  const reload = useCallback(async () => {
-    const next = await fetchLocalState();
-    if (next) show(next);
-  }, [show]);
-
-  useEffect(() => {
-    let alive = true;
-    let id: ReturnType<typeof setInterval> | undefined;
-    void fetchLocalState().then((first) => {
-      if (!alive) return;
-      if (first) show(first);
-      else setState(null);
-      // Scheduled hellos and remote sessions run on the server; pick up their results. Nothing to poll on the website.
-      if (first) id = setInterval(() => void reload(), REFRESH_MS);
-    });
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [reload, show]);
-
-  const run = useCallback(
-    async (key: string, body: LocalAction, done?: string) => {
-      setBusy(key);
-      const res = await localAction(body);
-      setBusy(null);
-      if (res.ok) {
-        show(res.data);
-        if (done) onNote(done);
-      } else {
-        onNote(res.error);
-        void reload();
-      }
-    },
-    [onNote, reload, show],
-  );
 
   if (state === undefined) return null;
   if (state === null) return <DesktopApp />;
@@ -179,7 +142,22 @@ function ProfileRow({ profile: p, state, now, busy, run }: RowProps) {
           <Icon name={busy === `hello-${p.id}` ? "refresh" : "flame"} className={busy === `hello-${p.id}` ? "spin" : undefined} />
           {busy === `hello-${p.id}` ? "Sending…" : "Say hello"}
         </button>
-        <button type="button" disabled={disabled || p.active} onClick={() => void run(`forget-${p.id}`, { action: "forget", profileId: p.id })} className="rounded-lg p-1.5 text-muted transition hover:bg-rose-500/15 hover:text-rose-500 disabled:opacity-30" aria-label="Forget saved login" title={p.active ? "Switch to another login first" : "Forget this saved login"}>
+        <button
+          type="button"
+          disabled={disabled || p.active}
+          onClick={async () => {
+            const ok = await confirmAction({
+              title: `Forget ${p.label}?`,
+              body: "The copy of this login saved on this computer is deleted, with its schedules. The account itself is not touched: sign the CLI in with it and save it again to bring it back.",
+              confirmLabel: "Forget it",
+              danger: true,
+            });
+            if (ok) void run(`forget-${p.id}`, { action: "forget", profileId: p.id }, `Forgot ${p.label}.`);
+          }}
+          className="rounded-lg p-1.5 text-muted transition hover:bg-rose-500/15 hover:text-rose-500 disabled:opacity-30"
+          aria-label="Forget saved login"
+          title={p.active ? "Switch to another login first" : "Forget this saved login"}
+        >
           <Icon name="trash" size={15} />
         </button>
       </div>

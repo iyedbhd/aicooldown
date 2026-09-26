@@ -5,6 +5,7 @@ import { formatTokens, lastDays } from "@/lib/activity";
 import { formatAgo, formatCountdown, formatMoney, formatPlan } from "@/lib/format";
 import { createInvite, manages, removeMember, revokeInvite, setRole, type Invite, type Member, type MemberAccount, type Role, type Workspace } from "@/lib/team";
 import { fullestWindow, lastActive, projectsOf, rollupProjects, totalsSince, type Period, type SessionRow } from "@/lib/team-stats";
+import { confirmAction, copyText } from "@/lib/ui";
 import { Icon } from "./Icon";
 import { PROVIDER_META, ProviderGlyph } from "./ProviderLogo";
 import { Avatar, Card, Empty, OnlineDot, RoleBadge, SharingChip } from "./TeamBits";
@@ -136,20 +137,22 @@ function MemberDetail({ ws, member, sessions, since, now, reload, flash, onOpenS
     await reload();
   }
 
-  function changeRole(role: Role) {
+  async function changeRole(role: Role) {
     if (!ws.team) return;
-    const question =
+    const title = role === "owner" ? `Make ${member.email} the owner of ${ws.team.name}?` : `Make ${member.email} ${role === "admin" ? "an admin" : "a member"} of ${ws.team.name}?`;
+    const body =
       role === "owner"
-        ? `Make ${member.email} the owner of ${ws.team.name}? You become an admin, and show the team's other owners and admins only what you share with them.`
+        ? "You become an admin, and show the team's other owners and admins only what you share with them."
         : role === "admin"
-          ? `Make ${member.email} an admin of ${ws.team.name}? They then see all the members' work, and choose which of their own projects and chats the team's owners and admins see: until they share some, none.`
-          : `Make ${member.email} a member of ${ws.team.name}? The team's owner and admins then see all of their work, what their sessions say included.`;
-    if (!window.confirm(question)) return;
+          ? "They then see all the members' work, and choose which of their own projects and chats the team's owners and admins see: until they share some, none."
+          : "The team's owner and admins then see all of their work, what their sessions say included.";
+    if (!(await confirmAction({ title, body, confirmLabel: role === "owner" ? "Hand the team over" : "Change the role" }))) return;
     void act(() => setRole(ws.team!.id, member.id, role), role === "owner" ? `${member.email} owns the team now.` : `${member.email} is now ${role === "admin" ? "an admin" : "a member"}.`);
   }
 
-  function remove() {
-    if (!ws.team || !window.confirm(`Remove ${member.email} from ${ws.team.name}? Their computers and accounts stay theirs.`)) return;
+  async function remove() {
+    if (!ws.team) return;
+    if (!(await confirmAction({ title: `Remove ${member.email} from ${ws.team.name}?`, body: "Their computers and accounts stay theirs.", confirmLabel: "Remove", danger: true }))) return;
     void act(() => removeMember(ws.team!.id, member.id), `Removed ${member.email}.`);
   }
 
@@ -229,7 +232,7 @@ function MemberDetail({ ws, member, sessions, since, now, reload, flash, onOpenS
           {canSetRole && (
             <label className="flex items-center gap-2 text-xs text-muted">
               role
-              <select value={member.role ?? "member"} disabled={busy} onChange={(e) => changeRole(e.target.value as Role)} className={input}>
+              <select value={member.role ?? "member"} disabled={busy} onChange={(e) => void changeRole(e.target.value as Role)} className={input}>
                 <option value="member">Member</option>
                 <option value="admin">Admin</option>
                 <option value="owner">Owner (hand over the team)</option>
@@ -237,7 +240,7 @@ function MemberDetail({ ws, member, sessions, since, now, reload, flash, onOpenS
             </label>
           )}
           {canRemove && (
-            <button type="button" disabled={busy} onClick={remove} className="btn border-rose-500/40 text-rose-600 dark:text-rose-400">
+            <button type="button" disabled={busy} onClick={() => void remove()} className="btn border-rose-500/40 text-rose-600 dark:text-rose-400">
               <Icon name="trash" />
               Remove from team
             </button>
@@ -308,12 +311,7 @@ function InviteCard({ ws, now, reload, flash }: { ws: Workspace; now: number; re
   }
 
   async function copy(url: string) {
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-    } catch {
-      window.prompt("Copy the invite link:", url);
-    }
+    if (await copyText(url, "Copy the invite link")) setCopied(true);
   }
 
   async function revoke(invite: Invite) {

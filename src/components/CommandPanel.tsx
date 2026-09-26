@@ -1,5 +1,5 @@
 import { formatCountdown } from "@/lib/format";
-import { providerVerdict, type Ranked } from "@/lib/stats";
+import { providerVerdict, verdictState, type Ranked } from "@/lib/stats";
 import type { Provider } from "@/lib/types";
 import { Icon } from "./Icon";
 import { PROVIDER_META, ProviderGlyph } from "./ProviderLogo";
@@ -39,8 +39,7 @@ export function CommandPanel({ ranked, now }: Props) {
         const meta = PROVIDER_META[provider];
         const list = ranked[provider];
         const verdict = providerVerdict(list, now);
-        const headroom = verdict.kind === "go" ? Math.min(verdict.sessionLeft ?? 100, verdict.weeklyLeft ?? 100) : null;
-        const state = verdict.kind === "wait" ? "wait" : verdict.kind === "unknown" ? "unknown" : headroom !== null && headroom < 20 ? "tight" : "go";
+        const { state, headroom } = verdictState(verdict);
         const s = STATE[state];
         // Wait: how far through the wait we are. Go: headroom on the account to use.
         const ringValue =

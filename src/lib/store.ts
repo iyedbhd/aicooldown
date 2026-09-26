@@ -70,7 +70,8 @@ export const remoteStore: AccountStore = {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   },
   async remove(id) {
-    const res = await fetch("/api/accounts", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    // keepalive: a removal committed as the page goes away still reaches the server.
+    const res = await fetch("/api/accounts", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }), keepalive: true });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   },
   async patch() {

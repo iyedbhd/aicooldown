@@ -1,312 +1,51 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { postJson } from "@/lib/api";
-import { desktopApp } from "@/lib/desktop";
-import { formatAgo, formatCountdown, formatDateTime, formatPlan } from "@/lib/format";
-import { dropHistory, loadHistory, recordSamples, type History } from "@/lib/history";
-import { localAction } from "@/lib/local";
-import { notifyChanges, notifyEnabled, requestNotifyPermission, setNotifyEnabled } from "@/lib/notify";
-import { POLL_INTERVAL_MS, backoffMs } from "@/lib/poll";
-import { codexIdentityFromTokens } from "@/lib/providers/codex";
-import { fetchSession, signOut, type SessionUser } from "@/lib/session";
+import { useEffect, useMemo, useState } from "react";
+import { useDesktop } from "@/lib/desktop";
+import { formatAgo, formatCountdown } from "@/lib/format";
 import { SITE } from "@/lib/site";
 import { rankAccounts, upcomingResets } from "@/lib/stats";
-import { loadAccounts, saveAccounts } from "@/lib/storage";
-import { localStore, remoteStore, type AccountStore, type NewAccount } from "@/lib/store";
-import type { Account, Identity, Usage } from "@/lib/types";
-import { loadUsage, type UsageState } from "@/lib/usage-client";
+import type { Usage } from "@/lib/types";
+import { openShell, useModKey } from "@/lib/ui";
+import { engine, useUsage } from "@/lib/usage/engine";
 import { AccountCard } from "./AccountCard";
-import { AccountDialog } from "./AccountDialog";
-import { AddAccountDialog } from "./AddAccountDialog";
-import { AuthDialog } from "./AuthDialog";
 import { CommandPanel } from "./CommandPanel";
 import { Icon } from "./Icon";
-import { Mark, Wordmark } from "./Logo";
-import { Overview } from "./Overview";
 import { LocalPanel } from "./LocalPanel";
+import { Mark, Wordmark } from "./Logo";
 import { MySessions } from "./MySessions";
+import { Overview } from "./Overview";
 import { GitHubGlyph, ProviderTile } from "./ProviderLogo";
 import { ResetTimeline } from "./ResetTimeline";
 import { ThemeToggle } from "./ThemeToggle";
 
-const SCHEDULER_MS = 5_000;
-const FOCUS_MIN_GAP_MS = 60_000;
-
 const btn = "btn";
 const btnPrimary = "btn btn-primary";
 
+/**
+ * The dashboard: a view of the usage engine (lib/usage/engine.ts), which
+ * keeps polling while other pages show. Its dialogs, toasts and shortcuts
+ * belong to the app shell. In the desktop app's window on Windows the title
+ * bar takes the logo, the Team link and settings, and the header here is a
+ * toolbar.
+ */
 export function Dashboard() {
-  const [user, setUser] = useState<SessionUser | null>(null);
-  const [store, setStore] = useState<AccountStore>(localStore);
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [hydrated, setHydrated] = useState(false);
-  const [states, setStates] = useState<Record<string, UsageState>>({});
-  const [history, setHistory] = useState<History>({});
+  const snap = useUsage((s) => s);
+  const desktop = useDesktop();
+  const mod = useModKey();
   const [now, setNow] = useState(() => Date.now());
-  const [showAdd, setShowAdd] = useState(false);
-  const [showAuth, setShowAuth] = useState(false);
-  const [showAccount, setShowAccount] = useState(false);
-  const [notify, setNotify] = useState(false);
-  /** In the desktop app's window rather than a browser tab: set after hydration, like everything read from the window. */
-  const [desktop, setDesktop] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [importOffer, setImportOffer] = useState<Account[] | null>(null);
-  const accountsRef = useRef<Account[]>([]);
-  const storeRef = useRef<AccountStore>(localStore);
-  const statesRef = useRef<Record<string, UsageState>>({});
-  const historyRef = useRef<History>({});
-  const notifyRef = useRef(false);
-  const lastFocusRefresh = useRef(0);
-
-  const setAccountList = useCallback((next: Account[]) => {
-    accountsRef.current = next;
-    setAccounts(next);
-  }, []);
-
-  const patchState = useCallback((id: string, patch: Partial<UsageState>) => {
-    statesRef.current = { ...statesRef.current, [id]: { ...statesRef.current[id], ...patch } as UsageState };
-    setStates(statesRef.current);
-  }, []);
-
-  const flash = useCallback((text: string, ms = 6000) => {
-    setNote(text);
-    setTimeout(() => setNote((n) => (n === text ? null : n)), ms);
-  }, []);
-
-  /** Guest mode only: one-time subscription lookup for accounts added before plans were stored. */
-  const ensurePlan = useCallback(
-    async (account: Account) => {
-      if (account.plan !== undefined || storeRef.current.mode !== "local" || !account.accessToken) return;
-      let plan: string | null = null;
-      if (account.provider === "codex") plan = codexIdentityFromTokens(account.accessToken).plan ?? null;
-      else {
-        const res = await postJson<Identity>("/api/identity", { provider: "claude", accessToken: account.accessToken });
-        if (!res.ok && res.status !== 401) return;
-        plan = res.ok ? (res.data.plan ?? null) : null;
-      }
-      await storeRef.current.patch(account.id, { plan });
-      setAccountList(accountsRef.current.map((a) => (a.id === account.id ? { ...a, plan } : a)));
-    },
-    [setAccountList],
-  );
-
-  const refreshOne = useCallback(
-    async (account: Account) => {
-      if (statesRef.current[account.id]?.status === "loading") return;
-      patchState(account.id, { status: "loading" });
-      const result = await loadUsage(account, storeRef.current.mode);
-      if (!accountsRef.current.some((a) => a.id === account.id)) return; // removed meanwhile
-      if (result.tokens) {
-        const patch = { accessToken: result.tokens.accessToken, refreshToken: result.tokens.refreshToken ?? account.refreshToken, expiresAt: result.tokens.expiresAt };
-        await storeRef.current.patch(account.id, patch);
-        setAccountList(accountsRef.current.map((a) => (a.id === account.id ? { ...a, ...patch } : a)));
-      }
-      if (result.usage?.plan && account.plan !== result.usage.plan && storeRef.current.mode === "remote") {
-        setAccountList(accountsRef.current.map((a) => (a.id === account.id ? { ...a, plan: result.usage!.plan } : a)));
-      }
-      if (result.usage && !result.usage.stale) {
-        historyRef.current = recordSamples(historyRef.current, account.id, result.usage);
-        setHistory(historyRef.current);
-      }
-      const prev = statesRef.current[account.id] ?? { status: "loading" };
-      const at = Date.now();
-      if (notifyRef.current && result.usage && !result.usage.stale) notifyChanges(account, prev.usage, result.usage, at);
-      const patch: UsageState = {
-        status: result.error ? "error" : "ok",
-        usage: result.usage ?? prev.usage,
-        error: result.error,
-      };
-      if (result.rateLimited) {
-        const hits = (prev.rateLimitHits ?? 0) + 1;
-        patch.rateLimitHits = hits;
-        patch.rateLimitedUntil = at + backoffMs(hits);
-        patch.nextPollAt = patch.rateLimitedUntil;
-      } else {
-        patch.rateLimitHits = 0;
-        patch.rateLimitedUntil = undefined;
-        patch.nextPollAt = at + POLL_INTERVAL_MS[account.provider];
-      }
-      patchState(account.id, patch);
-      if (result.usage) void ensurePlan(account);
-    },
-    [patchState, setAccountList, ensurePlan],
-  );
-
-  /** Polls every account whose turn has come. */
-  const pollDue = useCallback(
-    (force = false) => {
-      const at = Date.now();
-      for (const account of accountsRef.current) {
-        const s = statesRef.current[account.id];
-        if (s?.status === "loading") continue;
-        if (force || s?.nextPollAt === undefined || at >= s.nextPollAt) void refreshOne(account);
-      }
-    },
-    [refreshOne],
-  );
-
-  /** Switches the source of accounts and reloads the list; usage state starts fresh. */
-  const switchStore = useCallback(
-    async (next: AccountStore) => {
-      storeRef.current = next;
-      setStore(next);
-      statesRef.current = {};
-      setStates({});
-      try {
-        setAccountList(await next.list());
-      } catch (err) {
-        flash(err instanceof Error ? err.message : "Could not load accounts.");
-        setAccountList([]);
-      }
-      pollDue(true);
-    },
-    [setAccountList, pollDue, flash],
-  );
+  const { user, accounts, states, history } = snap;
+  const hydrated = snap.phase === "ready";
 
   useEffect(() => {
-    historyRef.current = loadHistory();
-    notifyRef.current = notifyEnabled();
-    setHistory(historyRef.current);
-    setNotify(notifyRef.current);
-    setDesktop(Boolean(desktopApp()));
-    void (async () => {
-      const u = await fetchSession();
-      setUser(u);
-      await switchStore(u ? remoteStore : localStore);
-      setHydrated(true);
-    })();
-    // switchStore is stable for the lifetime of the component.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    const scheduler = setInterval(() => pollDue(), SCHEDULER_MS);
     const tick = setInterval(() => setNow(Date.now()), 1000);
-    const onFocus = () => {
-      if (Date.now() - lastFocusRefresh.current < FOCUS_MIN_GAP_MS) return;
-      lastFocusRefresh.current = Date.now();
-      pollDue();
-    };
-    window.addEventListener("focus", onFocus);
-    return () => {
-      clearInterval(scheduler);
-      clearInterval(tick);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [hydrated, pollDue]);
+    return () => clearInterval(tick);
+  }, []);
 
-  async function handleSignedIn(u: SessionUser) {
-    setShowAuth(false);
-    setUser(u);
-    const local = loadAccounts().filter((a) => a.accessToken);
-    await switchStore(remoteStore);
-    if (local.length) setImportOffer(local);
-  }
-
-  async function importLocal(list: Account[]) {
-    setImportOffer(null);
-    try {
-      const created = await remoteStore.addMany(list.map((a) => ({ ...a, accessToken: a.accessToken! })));
-      saveAccounts([]);
-      setAccountList([...accountsRef.current, ...created]);
-      for (const a of created) void refreshOne(a);
-      flash(`Moved ${created.length} account${created.length === 1 ? "" : "s"} to your ${SITE.name} account and cleared them from this ${desktop ? "app" : "browser"}.`);
-    } catch (err) {
-      flash(err instanceof Error ? err.message : "Import failed.");
-    }
-  }
-
-  async function handleSignOut() {
-    await signOut();
-    // A computer connected to the account stops reporting to it; it reconnects when the same account signs in here again.
-    // Only a copy on the user's computer has one: elsewhere this answers 404.
-    await localAction({ action: "disconnect", forget: false });
-    setUser(null);
-    await switchStore(localStore);
-  }
-
-  async function handleAccountDeleted() {
-    setShowAccount(false);
-    await localAction({ action: "disconnect", forget: true });
-    setUser(null);
-    await switchStore(localStore);
-    setNote("Your account and everything stored on the server are gone.");
-  }
-
-  async function addAccount(partial: NewAccount) {
-    const account = await storeRef.current.add(partial);
-    setAccountList([...accountsRef.current, account]);
-    setShowAdd(false);
-    void refreshOne(account);
-  }
-
-  async function removeAccount(account: Account) {
-    if (!window.confirm(`Remove “${account.label}”?`)) return;
-    await storeRef.current.remove(account.id);
-    setAccountList(accountsRef.current.filter((a) => a.id !== account.id));
-    historyRef.current = dropHistory(historyRef.current, account.id);
-    setHistory(historyRef.current);
-    const next = { ...statesRef.current };
-    delete next[account.id];
-    statesRef.current = next;
-    setStates(next);
-  }
-
-  async function renameAccount(account: Account, label: string) {
-    await storeRef.current.rename(account.id, label);
-    setAccountList(accountsRef.current.map((a) => (a.id === account.id ? { ...a, label } : a)));
-  }
-
-  async function toggleNotify() {
-    if (notify) {
-      notifyRef.current = false;
-      setNotifyEnabled(false);
-      setNotify(false);
-      return;
-    }
-    const result = await requestNotifyPermission();
-    if (result !== "granted") {
-      flash(result === "denied" ? "Notifications are blocked for this site in your browser." : "This browser does not support notifications.");
-      return;
-    }
-    notifyRef.current = true;
-    setNotifyEnabled(true);
-    setNotify(true);
-    flash(`Notifications on: resets, 90% crossings and exhaustion, ${desktop ? "even while AI Cooldown sits in the tray" : "while this tab is open"}.`);
-  }
-
-  async function copyStatus() {
-    const lines = [`${SITE.name} · ${new Date().toLocaleString()}`];
-    for (const account of accountsRef.current) {
-      const usage = statesRef.current[account.id]?.usage;
-      const plan = formatPlan(account.plan ?? usage?.plan);
-      const head = `${account.provider === "claude" ? "Claude" : "Codex"} · ${account.label}${plan ? ` (${plan})` : ""}`;
-      if (!usage) {
-        lines.push(`${head}: no data`);
-        continue;
-      }
-      const t = Date.now();
-      const parts = usage.windows.map((w) => {
-        const reset = w.resetsAt ? `, resets ${formatDateTime(w.resetsAt, t)} (in ${formatCountdown(new Date(w.resetsAt).getTime() - t)})` : "";
-        return `${w.label} ${Math.round(100 - w.usedPercent)}% left${reset}`;
-      });
-      lines.push(`${head}: ${parts.join("; ")}`);
-    }
-    try {
-      await navigator.clipboard.writeText(lines.join("\n"));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      window.prompt("Copy your status:", lines.join("\n"));
-    }
-  }
-
-  const usages: Record<string, Usage | undefined> = Object.fromEntries(accounts.map((a) => [a.id, states[a.id]?.usage]));
-  const ranked = rankAccounts(accounts, usages);
+  const usages = useMemo<Record<string, Usage | undefined>>(() => Object.fromEntries(accounts.map((a) => [a.id, states[a.id]?.usage])), [accounts, states]);
+  const ranked = useMemo(() => rankAccounts(accounts, usages), [accounts, usages]);
   const resets = upcomingResets(accounts, usages, now);
   const anyLoading = accounts.some((a) => states[a.id]?.status === "loading");
   const freshest = accounts
@@ -317,15 +56,24 @@ export function Dashboard() {
 
   const waitingOn = resets.find((e) => e.window.usedPercent >= 85);
   const title = accounts.length === 0 ? SITE.name : waitingOn ? `${formatCountdown(waitingOn.at - now)} · ${SITE.name}` : `ready · ${SITE.name}`;
+  // Every render (each second), as navigating back here lets Next set the page's own title after this ran.
   useEffect(() => {
-    document.title = title;
-  }, [title]);
+    if (document.title !== title) document.title = title;
+  });
+
+  async function copyStatus() {
+    if (!(await engine.copyStatus())) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  const openSettings = () => openShell({ settings: desktop ? "general" : "appearance" });
 
   return (
-    <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
+    <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 titlebar:py-4">
       <header className="border-b border-line pb-4">
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 titlebar:hidden">
             <Mark size={44} animated />
             <div>
               <h1 className="text-2xl leading-none">
@@ -334,53 +82,69 @@ export function Dashboard() {
               <p className="eyebrow mt-1.5">{SITE.tagline}</p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             {user ? (
               <span className="mr-1 flex items-center gap-2 font-mono text-[11px] text-muted">
-                <button type="button" onClick={() => setShowAccount(true)} className="max-w-[16rem] truncate hover:text-fg" title="Account settings: password, devices, delete">
+                <button type="button" onClick={() => openShell("account")} className="max-w-[16rem] truncate hover:text-fg" title="Account settings: password, devices, delete">
                   {user.email}
                 </button>
-                <button type="button" onClick={() => void handleSignOut()} className="flex items-center gap-1 text-faint hover:text-fg" title="Sign out">
+                <button type="button" onClick={() => void engine.signOut()} className="flex items-center gap-1 text-faint hover:text-fg" title="Sign out">
                   <Icon name="logout" size={12} />
                   sign out
                 </button>
               </span>
             ) : (
-              <button type="button" onClick={() => setShowAuth(true)} className={btn}>
+              <button type="button" onClick={() => openShell("auth")} className={btn}>
                 <Icon name="user" />
                 Sign in
               </button>
             )}
-            <Link href="/team" title="Your team: people, computers, projects, token usage and remote sessions" className={btn}>
+            <Link href="/team" title="Your team: people, computers, projects, token usage and remote sessions" className={`${btn} titlebar:hidden`}>
               <Icon name="users" />
               Team
             </Link>
-            <a href={SITE.repo} target="_blank" rel="noopener noreferrer" title="Open source · star the repo on GitHub" className={btn}>
+            <a href={SITE.repo} target="_blank" rel="noopener noreferrer" title="Open source · star the repo on GitHub" className={`${btn} desktop:hidden`}>
               <Icon name="star" fill className="text-amber-400" />
               Star us on GitHub
             </a>
-            <ThemeToggle className={btn} />
-            <button type="button" onClick={() => void toggleNotify()} disabled={accounts.length === 0} aria-pressed={notify} title="Notification when a limit resets, crosses 90% or runs out" className={`${btn} ${notify ? "btn-accent" : ""}`}>
-              <Icon name={notify ? "bell" : "bellOff"} />
-              {notify ? "Notifying" : "Notify me"}
+            <ThemeToggle className={`${btn} titlebar:hidden`} />
+            <button
+              type="button"
+              onClick={() => void engine.toggleNotify()}
+              disabled={accounts.length === 0}
+              aria-pressed={snap.notify}
+              title="Notification when a limit resets, nears its end or runs out"
+              className={`${btn} ${snap.notify ? "btn-accent" : ""}`}
+            >
+              <Icon name={snap.notify ? "bell" : "bellOff"} />
+              {snap.notify ? "Notifying" : "Notify me"}
             </button>
             <button type="button" onClick={() => void copyStatus()} disabled={accounts.length === 0} title="Copy a text summary of every account" className={btn}>
               <Icon name={copied ? "check" : "copy"} />
               {copied ? "Copied" : "Copy status"}
             </button>
-            <button type="button" onClick={() => pollDue(true)} disabled={anyLoading || accounts.length === 0} className={btn}>
+            <button
+              type="button"
+              onClick={() => engine.refresh()}
+              disabled={anyLoading || accounts.length === 0}
+              title={desktop ? "Refresh every account (Ctrl+R)" : "Refresh every account"}
+              className={btn}
+            >
               <Icon name="refresh" className={anyLoading ? "spin" : undefined} />
               Refresh
             </button>
-            <button type="button" onClick={() => setShowAdd(true)} className={btnPrimary}>
+            <button type="button" onClick={() => openShell("add")} title={desktop ? "Add account (Ctrl+N)" : undefined} className={btnPrimary}>
               <Icon name="plus" />
               Add account
+            </button>
+            <button type="button" onClick={openSettings} className={`${btn} px-2 titlebar:hidden`} aria-label="Settings" title="Settings (Ctrl+,)">
+              <Icon name="settings" />
             </button>
           </div>
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 font-mono text-[11px] text-faint">
           <span>
-            {store.mode === "remote" ? "accounts synced to your AI Cooldown account · tokens stay on the server" : `guest mode · accounts and tokens stay in this ${desktop ? "app" : "browser"}`}
+            {snap.mode === "remote" ? "accounts synced to your AI Cooldown account · tokens stay on the server" : `guest mode · accounts and tokens stay in this ${desktop ? "app" : "browser"}`}
           </span>
           <span className="flex items-center gap-2 tabular-nums" suppressHydrationWarning>
             {accounts.length > 0 && <span className={`h-1.5 w-1.5 rounded-full ${anyLoading ? "live bg-accent" : "bg-emerald-500"}`} aria-hidden />}
@@ -389,23 +153,17 @@ export function Dashboard() {
         </div>
       </header>
 
-      {note && (
-        <div role="status" className="toast fixed bottom-4 right-4 z-40 max-w-sm rounded-xl border border-line bg-panel px-4 py-3 text-sm text-fg-2 shadow-lg">
-          {note}
-        </div>
-      )}
-
-      {importOffer && (
+      {snap.importOffer && (
         <div className="fade-in mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-accent/40 bg-panel px-4 py-3">
           <p className="text-sm text-fg-2">
-            This browser has {importOffer.length} guest account{importOffer.length === 1 ? "" : "s"}. Move {importOffer.length === 1 ? "it" : "them"} to your{" "}
-            {SITE.name} account so you see {importOffer.length === 1 ? "it" : "them"} everywhere?
+            This {desktop ? "app" : "browser"} has {snap.importOffer.length} guest account{snap.importOffer.length === 1 ? "" : "s"}. Move{" "}
+            {snap.importOffer.length === 1 ? "it" : "them"} to your {SITE.name} account so you see {snap.importOffer.length === 1 ? "it" : "them"} everywhere?
           </p>
           <div className="flex gap-2">
-            <button type="button" onClick={() => setImportOffer(null)} className={btn}>
+            <button type="button" onClick={() => engine.dismissImport()} className={btn}>
               Keep here
             </button>
-            <button type="button" onClick={() => void importLocal(importOffer)} className={btnPrimary}>
+            <button type="button" onClick={() => void engine.importGuest()} className={btnPrimary}>
               Move to account
             </button>
           </div>
@@ -423,22 +181,24 @@ export function Dashboard() {
           <p className="eyebrow">no accounts</p>
           <h2 className="mt-2 text-lg font-medium text-fg">Connect a Claude or ChatGPT/Codex account</h2>
           <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-            You get every session, weekly and per-model limit (Fable included), when each resets, which account to use next, and
-            whether your current pace runs out before the reset.{" "}
-            {user ? "Accounts are stored on the server and follow you across devices." : `Without signing in, everything stays in this ${desktop ? "app" : "browser"}.`}
+            You get every session, weekly and per-model limit (Fable included), when each resets, which account to use next, and whether your current pace runs
+            out before the reset. {user ? "Accounts are stored on the server and follow you across devices." : `Without signing in, everything stays in this ${desktop ? "app" : "browser"}.`}
           </p>
           <div className="mt-6 flex justify-center gap-2">
-            <button type="button" onClick={() => setShowAdd(true)} className={btnPrimary}>
+            <button type="button" onClick={() => openShell("add")} className={btnPrimary}>
               <Icon name="plus" />
               Add your first account
             </button>
             {!user && (
-              <button type="button" onClick={() => setShowAuth(true)} className={btn}>
+              <button type="button" onClick={() => openShell("auth")} className={btn}>
                 <Icon name="user" />
                 Sign in to sync
               </button>
             )}
           </div>
+          <p className="mt-5 text-xs text-faint">
+            Tip: press <kbd className="rounded border border-line px-1 font-mono text-[10px]">{mod}+K</kbd> to search and run any command.
+          </p>
         </section>
       ) : (
         <>
@@ -453,7 +213,9 @@ export function Dashboard() {
                 <h2 className="mb-2 text-sm font-medium text-muted">Capacity comes back</h2>
                 <ResetTimeline accounts={accounts} events={resets} now={now} />
               </div>
-              <h2 className="text-sm font-medium text-muted">Accounts</h2>
+              <h2 id="accounts-heading" className="text-sm font-medium text-muted">
+                Accounts
+              </h2>
             </div>
           )}
           <div className="mt-2 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -464,19 +226,20 @@ export function Dashboard() {
                 state={states[account.id]}
                 history={history[account.id]}
                 now={now}
-                synced={store.mode === "remote"}
-                onRefresh={() => void refreshOne(account)}
-                onRemove={() => void removeAccount(account)}
-                onRename={(label) => void renameAccount(account, label)}
+                synced={snap.mode === "remote"}
+                onRefresh={() => engine.refresh(account.id)}
+                onRemove={() => engine.remove(account.id)}
+                onRename={(label) => void engine.rename(account.id, label)}
+                onCopy={() => void engine.copyStatus(account.id)}
               />
             ))}
           </div>
         </>
       )}
 
-      {hydrated && <LocalPanel now={now} user={user} onNote={flash} />}
+      {hydrated && <LocalPanel now={now} user={user} />}
 
-      <footer className="mt-12 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-line pt-4 font-mono text-[11px] text-faint">
+      <footer className="mt-12 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-line pt-4 font-mono text-[11px] text-faint desktop:hidden">
         <span>
           Open source under MIT ·{" "}
           <a href={SITE.repo} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-muted hover:text-fg">
@@ -499,21 +262,6 @@ export function Dashboard() {
           </Link>
         </span>
       </footer>
-
-      {showAdd && <AddAccountDialog onAdd={addAccount} onClose={() => setShowAdd(false)} />}
-      {showAuth && <AuthDialog onSignedIn={(u) => void handleSignedIn(u)} onClose={() => setShowAuth(false)} localCount={accounts.length} />}
-      {showAccount && user && (
-        <AccountDialog
-          user={user}
-          linkedCount={accounts.length}
-          onClose={() => setShowAccount(false)}
-          onNote={(text) => {
-            setNote(text);
-            setShowAccount(false);
-          }}
-          onDeleted={() => void handleAccountDeleted()}
-        />
-      )}
     </main>
   );
 }

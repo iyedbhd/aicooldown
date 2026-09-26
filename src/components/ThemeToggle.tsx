@@ -1,37 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { setThemePref, useTheme } from "@/lib/theme";
 import { Icon } from "./Icon";
 
-type Theme = "light" | "dark";
-
-function current(): Theme {
-  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
-}
-
-/** Flips between light and dark. The choice is remembered per browser; the first visit follows the OS. */
+/** Flips between light and dark. The choice is remembered per browser; Settings can go back to following the system. */
 export function ThemeToggle({ className }: { className?: string }) {
-  const [theme, setTheme] = useState<Theme>("dark");
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => setTheme(current()));
-    return () => cancelAnimationFrame(frame);
-  }, []);
-
-  function toggle() {
-    const next: Theme = theme === "dark" ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    try {
-      localStorage.setItem("aic:theme", next);
-    } catch {
-      /* ignore */
-    }
-    setTheme(next);
-  }
-
+  const theme = useTheme();
+  const next = theme === "dark" ? "light" : "dark";
   return (
     <button
       type="button"
-      onClick={toggle}
+      onClick={() => setThemePref(next)}
       className={className}
       aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
       title={theme === "dark" ? "Light mode" : "Dark mode"}

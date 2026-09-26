@@ -106,6 +106,15 @@ export function providerVerdict(list: Ranked[], now: number): Verdict {
   return { kind: "wait", account: soonest.account, waitMs: soonest.blockedUntil! - now, windowMs: soonest.blockedWindowMs };
 }
 
+/** How a verdict reads: go, go with under 20% headroom ("tight"), wait, or unknown; with the headroom when going. */
+export type VerdictState = "go" | "tight" | "wait" | "unknown";
+
+export function verdictState(verdict: Verdict): { state: VerdictState; headroom: number | null } {
+  const headroom = verdict.kind === "go" ? Math.min(verdict.sessionLeft ?? 100, verdict.weeklyLeft ?? 100) : null;
+  const state = verdict.kind === "wait" ? "wait" : verdict.kind === "unknown" ? "unknown" : headroom !== null && headroom < 20 ? "tight" : "go";
+  return { state, headroom };
+}
+
 export type DailyBudget = {
   /** Percent per day you can spend and still reach the reset. */
   perDay: number;

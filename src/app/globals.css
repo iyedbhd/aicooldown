@@ -1,7 +1,10 @@
 @import "tailwindcss";
 
-/* Dark is the default; light is opted into with data-theme="light" (see layout.tsx). */
+/* Dark is the default; light is opted into with data-theme="light" (see lib/theme-init.ts). */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+/* In the desktop app's window (desktop:hidden drops the website's own chrome there), and where the page draws the title bar (Windows). */
+@custom-variant desktop (&:where([data-shell="desktop"], [data-shell="desktop"] *));
+@custom-variant titlebar (&:where([data-titlebar="custom"], [data-titlebar="custom"] *));
 
 @theme inline {
   --font-sans: var(--font-geist-sans);
@@ -19,6 +22,11 @@
   --color-accent: var(--accent);
   --color-claude: #d97757;
   --color-codex: #10a37f;
+}
+
+:root {
+  /* Height of the desktop app's title bar; nothing on the website. */
+  --tb-h: 0px;
 }
 
 :root,
@@ -62,81 +70,217 @@ body {
   color: var(--fg);
 }
 
-/* Buttons share one look everywhere. */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  border: 1px solid var(--line);
-  border-radius: 0.6rem;
-  padding: 0.4rem 0.7rem;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--fg-2);
-  background: var(--panel);
-  transition:
-    border-color 0.15s,
-    color 0.15s,
-    background 0.15s,
-    transform 0.15s;
+/*
+ * The frame around every page (components/AppShell.tsx). On the website it
+ * adds no box. Under the desktop app's own title bar it is a fixed box below
+ * the bar; layout containment makes it the containing block for the pages'
+ * fixed overlays (the chat, the image viewer), so they start below the bar
+ * too, and its scroller keeps the scrollbar clear of the caption buttons.
+ */
+#aic-frame,
+#aic-scroll {
+  display: contents;
 }
-.btn:hover:not(:disabled) {
-  border-color: var(--fg);
-  color: var(--fg);
+:root[data-titlebar="custom"] {
+  --tb-h: env(titlebar-area-height, 40px);
 }
-.btn:active:not(:disabled) {
-  transform: translateY(1px);
+:root[data-titlebar="custom"][data-fullscreen] {
+  --tb-h: 0px;
 }
-.btn:disabled {
-  opacity: 0.4;
+:root[data-titlebar="custom"] body {
+  overflow: hidden;
+  background-image: none;
 }
-.btn-primary {
-  border-color: var(--fg);
-  background: var(--fg);
-  color: var(--bg);
+:root[data-titlebar="custom"] #aic-frame {
+  display: block;
+  position: fixed;
+  inset: var(--tb-h) 0 0 0;
+  contain: layout;
 }
-.btn-primary:hover:not(:disabled) {
-  color: var(--bg); /* not .btn:hover's, which is its background */
-  opacity: 0.88;
-}
-.btn-accent {
-  border-color: color-mix(in oklab, var(--accent) 60%, transparent);
-  color: var(--accent);
+:root[data-titlebar="custom"] #aic-scroll {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* The dot grid scrolls with the page, as it does in a browser. */
+  background-image: radial-gradient(var(--grid) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-attachment: local;
 }
 
-/* Fact chips under each meter. */
-.chip {
-  display: inline-flex;
+/*
+ * The desktop app's title bar on Windows (components/TitleBar.tsx): the whole
+ * window width, with room left for the system's caption buttons, which
+ * main.mjs colours to match. Three columns keep the search box centred.
+ */
+.titlebar {
+  display: none;
+}
+:root[data-titlebar="custom"] .titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
   align-items: center;
-  gap: 0.3rem;
-  border-radius: 999px;
-  padding: 0.15rem 0.55rem;
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  background: var(--panel-3);
+  gap: 0.75rem;
+  height: var(--tb-h);
+  padding-left: env(titlebar-area-x, 0px);
+  padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 138px)));
+  background: var(--bg);
+  font-size: 12.5px;
+  user-select: none;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+:root[data-titlebar="custom"][data-fullscreen] .titlebar {
+  display: none;
+}
+.titlebar-control {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.titlebar-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: clamp(12rem, 34vw, 26rem);
+  height: 1.75rem;
+  padding: 0 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--panel-2);
+  color: var(--faint);
+  transition:
+    border-color 0.15s,
+    color 0.15s;
+}
+.titlebar-search:hover {
+  border-color: color-mix(in oklab, var(--fg) 30%, transparent);
   color: var(--muted);
 }
-.chip-good {
-  background: color-mix(in oklab, #10b981 14%, transparent);
-  color: #059669;
+@media (max-width: 720px) {
+  .titlebar-name,
+  .titlebar-label {
+    display: none;
+  }
+  .titlebar-search {
+    width: 2rem;
+    justify-content: center;
+    padding: 0;
+  }
 }
-.chip-warn {
-  background: color-mix(in oklab, #f59e0b 16%, transparent);
-  color: #b45309;
+
+/* Keyboard focus is always visible; mouse clicks show none. */
+:where(button, a, [role="tab"], [role="switch"], [role="radio"], [role="option"], summary, select):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
-.chip-bad {
-  background: color-mix(in oklab, #f43f5e 14%, transparent);
-  color: #be123c;
+
+/* The desktop app: thin scrollbars that follow the theme, and chrome that does not select like text. */
+:root[data-shell="desktop"] * {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--muted) 50%, transparent) transparent;
 }
-:root[data-theme="dark"] .chip-good {
-  color: #6ee7b7;
+:root[data-shell="desktop"] :where(.btn, .chip, .eyebrow, [role="tab"], [role="menuitem"], nav) {
+  user-select: none;
 }
-:root[data-theme="dark"] .chip-warn {
-  color: #fcd34d;
-}
-:root[data-theme="dark"] .chip-bad {
-  color: #fda4af;
+
+/*
+ * Shared component classes, in the components layer: Tailwind utilities on the
+ * same element win over them (btn border-rose-500, titlebar:hidden), as they
+ * would not over unlayered CSS.
+ */
+@layer components {
+  /* Buttons share one look everywhere. */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 0.6rem;
+    padding: 0.4rem 0.7rem;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--fg-2);
+    background: var(--panel);
+    transition:
+      border-color 0.15s,
+      color 0.15s,
+      background 0.15s,
+      transform 0.15s;
+  }
+  .btn:hover:not(:disabled) {
+    border-color: var(--fg);
+    color: var(--fg);
+  }
+  .btn:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+  .btn:disabled {
+    opacity: 0.4;
+  }
+  .btn-primary {
+    border-color: var(--fg);
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .btn-primary:hover:not(:disabled) {
+    color: var(--bg); /* not .btn:hover's, which is its background */
+    opacity: 0.88;
+  }
+  .btn-accent {
+    border-color: color-mix(in oklab, var(--accent) 60%, transparent);
+    color: var(--accent);
+  }
+  .btn-danger {
+    border-color: #e11d48;
+    background: #e11d48;
+    color: #fff;
+  }
+  .btn-danger:hover:not(:disabled) {
+    border-color: #be123c;
+    background: #be123c;
+    color: #fff;
+  }
+
+  /* Fact chips under each meter. */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    border-radius: 999px;
+    padding: 0.15rem 0.55rem;
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    background: var(--panel-3);
+    color: var(--muted);
+  }
+  .chip-good {
+    background: color-mix(in oklab, #10b981 14%, transparent);
+    color: #059669;
+  }
+  .chip-warn {
+    background: color-mix(in oklab, #f59e0b 16%, transparent);
+    color: #b45309;
+  }
+  .chip-bad {
+    background: color-mix(in oklab, #f43f5e 14%, transparent);
+    color: #be123c;
+  }
+  :root[data-theme="dark"] .chip-good {
+    color: #6ee7b7;
+  }
+  :root[data-theme="dark"] .chip-warn {
+    color: #fcd34d;
+  }
+  :root[data-theme="dark"] .chip-bad {
+    color: #fda4af;
+  }
 }
 
 /* Loading shimmer. */
@@ -169,6 +313,32 @@ body {
   animation: toast-in 0.25s ease-out both;
 }
 
+/* Dialogs and menus rise in; their backdrop fades in. */
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+.modal-panel {
+  animation: modal-in 0.16s ease-out both;
+}
+.modal-backdrop {
+  animation: backdrop-in 0.16s ease-out both;
+}
+.menu {
+  animation: modal-in 0.12s ease-out both;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -192,13 +362,15 @@ body {
   animation: blink 1.6s ease-in-out infinite;
 }
 
-/* Small uppercase mono label used for section headings and metadata. */
-.eyebrow {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--muted);
+@layer components {
+  /* Small uppercase mono label used for section headings and metadata. */
+  .eyebrow {
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
 }
 
 @keyframes fade-in {
@@ -324,6 +496,9 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .modal-panel,
+  .modal-backdrop,
+  .menu,
   .fade-in,
   .draw-in,
   .live-dot,

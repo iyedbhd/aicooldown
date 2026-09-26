@@ -24,6 +24,7 @@ import {
 } from "@/lib/team";
 import type { Tool } from "@/lib/activity";
 import { fullestWindow, totalsSince, type Period, type SessionRow } from "@/lib/team-stats";
+import { confirmAction } from "@/lib/ui";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
 import { Avatar, Card, Empty, OnlineDot } from "./TeamBits";
@@ -193,7 +194,15 @@ function DeviceCard({ ws, sessions, device: d, ownerEmail, period, now, reload, 
   }
 
   async function remove() {
-    if (!window.confirm(`Remove ${d.name}? Its remote sessions go with it. If AI Cooldown still runs there, it just stops being connected.`)) return;
+    if (
+      !(await confirmAction({
+        title: `Remove ${d.name}?`,
+        body: "Its remote sessions go with it. If AI Cooldown still runs there, it just stops being connected.",
+        confirmLabel: "Remove",
+        danger: true,
+      }))
+    )
+      return;
     setBusy(true);
     const res = await removeDevice(d.id);
     setBusy(false);

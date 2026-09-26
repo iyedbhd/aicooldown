@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchSession, type SessionUser } from "@/lib/session";
+import { useCommands } from "@/lib/commands";
+import { useDesktop } from "@/lib/desktop";
+import { fetchSession, onSessionChange, type SessionUser } from "@/lib/session";
 import {
   changeSharing,
   createTeam,
@@ -18,6 +20,7 @@ import {
   type Workspace,
 } from "@/lib/team";
 import { allSessions, liveNow, PERIODS, type Period } from "@/lib/team-stats";
+import { confirmAction, toast } from "@/lib/ui";
 import { AuthDialog } from "./AuthDialog";
 import { ChatPanel, type ChatTarget } from "./ChatPanel";
 import { Icon } from "./Icon";
@@ -75,9 +78,12 @@ function SharingLine({ ws, onShare }: { ws: Workspace; onShare: (change: Sharing
     if (everything === all) return;
     if (
       everything &&
-      !window.confirm(
-        "Show the other owners and admins of your teams all of your work? They then see every project and session on your computers, what those sessions say where your computers let that reach the website, and can continue those sessions where you allow remote sessions.",
-      )
+      !(await confirmAction({
+        title: "Show the other owners and admins all of your work?",
+        body: "They then see every project and session on your computers, what those sessions say where your computers let that reach the website, and can continue those sessions where you allow remote sessions.",
+        confirmLabel: "Show everything",
+        danger: true,
+      }))
     )
       return;
     setBusy(true);
@@ -126,7 +132,6 @@ export function TeamConsole() {
   const [tab, setTab] = useState<Tab>("overview");
   const [period, setPeriod] = useState<Period>(7);
   const [now, setNow] = useState(() => Date.now());
-  const [note, setNote] = useState<string | null>(null);
   /** The conversation open in the chat. */
   const [chat, setChat] = useState<ChatTarget | null>(null);
   const [filter, setFilter] = useState<SessionFilter>(NO_FILTER);
@@ -137,8 +142,7 @@ export function TeamConsole() {
   const scopeRef = useRef<string | null>(null);
 
   const flash = useCallback((text: string) => {
-    setNote(text);
-    setTimeout(() => setNote((n) => (n === text ? null : n)), 6000);
+    toast(text);
   }, []);
 
   const refreshTeams = useCallback(async () => {
@@ -205,7 +209,12 @@ export function TeamConsole() {
   useEffect(() => {
     void fetchSession().then(begin);
     const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(tick);
+    // Signed in or out elsewhere (the command palette, the dashboard in another page of the app).
+    const off = onSessionChange(() => void fetchSession().then(begin));
+    return () => {
+      clearInterval(tick);
+      off();
+    };
   }, [begin]);
 
   useEffect(() => {
@@ -255,9 +264,9 @@ export function TeamConsole() {
     if (!ws?.team) return;
     const owner = ws.role === "owner";
     const question = owner
-      ? `Delete ${ws.team.name}? Its members keep their accounts, computers and sessions; only the team goes.`
-      : `Leave ${ws.team.name}? Its owner and admins stop seeing your computers, usage and limits.`;
-    if (!window.confirm(question)) return;
+      ? "Its members keep their accounts, computers and sessions; only the team goes."
+      : "Its owner and admins stop seeing your computers, usage and limits.";
+    if (!(await confirmAction({ title: owner ? `Delete ${ws.team.name}?` : `Leave ${ws.team.name}?`, body: question, confirmLabel: owner ? "Delete the team" : "Leave", danger: true }))) return;
     const res = owner ? await deleteTeam(ws.team.id) : await removeMember(ws.team.id, ws.me.id);
     if (!res.ok) return flash(res.error);
     await refreshTeams();
@@ -280,10 +289,19 @@ export function TeamConsole() {
   const live = ws ? liveNow(ws, sessions) : null;
   const liveCount = live ? live.sessions.length + live.runs.length : 0;
   const canChat = Boolean(ws && devices.some((d) => mayRunOn(ws, d)));
+  const desktop = useDesktop();
+
+  useCommands("team", () => [
+    ...(user ? [{ id: "refresh", title: "Refresh the team", group: "Team", icon: "refresh" as const, shortcut: desktop ? "Ctrl+R" : undefined, keywords: "reload", run: () => void reload() }] : []),
+    ...(ws
+      ? TABS.map((t) => ({ id: `team-tab:${t.id}`, title: `Team: ${t.label}`, group: "Team", icon: t.icon, keywords: "tab section", run: () => setTab(t.id) }))
+      : []),
+    ...(canChat ? [{ id: "new-chat", title: "New chat on a computer", group: "Team", icon: "terminal" as const, keywords: "claude codex session run", run: () => newChat() }] : []),
+  ]);
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
-      <header className="border-b border-line pb-4">
+      <header className="border-b border-line pb-4 titlebar:hidden">
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
           <Link href="/" className="flex items-center gap-3">
             <Mark size={40} animated />
@@ -304,12 +322,6 @@ export function TeamConsole() {
           </div>
         </div>
       </header>
-
-      {note && (
-        <div role="status" className="toast fixed bottom-4 right-4 z-40 max-w-sm rounded-xl border border-line bg-panel px-4 py-3 text-sm text-fg-2 shadow-lg">
-          {note}
-        </div>
-      )}
 
       {user === null && (
         <section className="fade-in mx-auto mt-12 max-w-xl rounded-2xl border border-dashed border-line p-10 text-center">
@@ -524,10 +536,8 @@ export function TeamConsole() {
         <AuthDialog
           localCount={0}
           onClose={() => setShowAuth(false)}
-          onSignedIn={(u) => {
-            setShowAuth(false);
-            void begin(u);
-          }}
+          // Signing in is announced: the session listener above loads the teams.
+          onSignedIn={() => setShowAuth(false)}
         />
       )}
     </main>

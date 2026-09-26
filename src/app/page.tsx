@@ -26,7 +26,8 @@ export default function Page() {
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }} />
       <Dashboard />
-      <section className="mx-auto w-full max-w-6xl px-4 pb-10 sm:px-6">
+      {/* For visitors and crawlers of the website; the desktop app's window leaves it out. */}
+      <section className="mx-auto w-full max-w-6xl px-4 pb-10 sm:px-6 desktop:hidden">
         <div className="grid gap-8 border-t border-line pt-8 md:grid-cols-2">
           <div>
             <h2 className="text-sm font-medium text-muted">What this is</h2>

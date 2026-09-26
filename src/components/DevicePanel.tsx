@@ -6,6 +6,7 @@ import { formatAgo } from "@/lib/format";
 import type { LocalAction, LocalDevice, LocalState } from "@/lib/local";
 import type { SessionUser } from "@/lib/session";
 import { REMOTE_HELP, REMOTE_LABEL, REMOTE_LEVELS, SHARE_HELP, SHARE_LABEL, SHARE_LEVELS, TOOL_NAME, type RemoteLevel, type ShareLevel } from "@/lib/team";
+import { confirmAction, copyText } from "@/lib/ui";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
 import { StatusChip } from "./TeamBits";
@@ -39,16 +40,21 @@ export function DevicePanel({ device, tools, user, now, busy, run }: Props) {
     void run("connect", { action: "connect" });
   }, [mine, device.linked, run]);
 
-  function setShare(level: ShareLevel) {
+  async function setShare(level: ShareLevel) {
     if (level === device.share) return;
-    const question =
-      level === "on"
-        ? "Let what the Claude Code and Codex sessions on this computer say reach the website?\n\nSigned in as you, you then see each session's title (or its first " +
-          "prompt) on the Team page, and can have any session's conversation sent there, and continue it: prompts, replies, the commands run and what they " +
-          "printed, which can include code, file contents and anything else a session saw. A conversation is sent only when asked for, and kept there a week. " +
-          "The people in your teams see it only for the projects and chats you share with them on the Team page."
-        : null;
-    if (question && !window.confirm(question)) return;
+    if (
+      level === "on" &&
+      !(await confirmAction({
+        title: "Let what this computer's sessions say reach the website?",
+        body:
+          "Signed in as you, you then see each session's title (or its first prompt) on the Team page, and can have any session's conversation sent there, " +
+          "and continue it: prompts, replies, the commands run and what they printed, which can include code, file contents and anything else a session saw. " +
+          "A conversation is sent only when asked for, and kept there a week.\n\nThe people in your teams see it only for the projects and chats you share with them on the Team page.",
+        confirmLabel: "Let it reach the website",
+        danger: true,
+      }))
+    )
+      return;
     void run(
       `share-${level}`,
       { action: "share", level },
@@ -57,9 +63,18 @@ export function DevicePanel({ device, tools, user, now, busy, run }: Props) {
   }
   const managedBy = device.sharing?.managedBy ?? [];
 
-  function setLevel(level: RemoteLevel) {
+  async function setLevel(level: RemoteLevel) {
     if (level === device.remote) return;
-    if (level === "full" && !window.confirm("Full access lets remote sessions edit any file in a project and run any command on this computer, without asking. Allow it?")) return;
+    if (
+      level === "full" &&
+      !(await confirmAction({
+        title: "Allow full access?",
+        body: "Full access lets remote sessions edit any file in a project and run any command on this computer, without asking.",
+        confirmLabel: "Allow full access",
+        danger: true,
+      }))
+    )
+      return;
     void run(`remote-${level}`, { action: "remote", level }, level === "off" ? "Remote sessions are off on this computer." : `Remote sessions here may now: ${REMOTE_LABEL[level].toLowerCase()}.`);
   }
 
@@ -130,7 +145,7 @@ export function DevicePanel({ device, tools, user, now, busy, run }: Props) {
                     role="radio"
                     aria-checked={device.share === level}
                     disabled={disabled}
-                    onClick={() => setShare(level)}
+                    onClick={() => void setShare(level)}
                     className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition ${device.share === level ? "bg-panel-3 text-fg" : "text-muted hover:text-fg-2"}`}
                   >
                     <Icon name={level === "off" ? "lock" : "eye"} size={11} />
@@ -153,7 +168,7 @@ export function DevicePanel({ device, tools, user, now, busy, run }: Props) {
                 role="radio"
                 aria-checked={device.remote === level}
                 disabled={disabled}
-                onClick={() => setLevel(level)}
+                onClick={() => void setLevel(level)}
                 className={`rounded-md px-2.5 py-1 text-xs transition ${device.remote === level ? (level === "full" ? "bg-rose-500/15 text-rose-700 dark:text-rose-300" : "bg-panel-3 text-fg") : "text-muted hover:text-fg-2"}`}
               >
                 {REMOTE_LABEL[level]}
@@ -218,12 +233,7 @@ function SignInHints({ tools }: { tools: LocalState["tools"] }) {
   const waiting = (["claude", "codex"] as const).filter((p) => tools[p].state !== "ready");
   if (waiting.length === 0) return null;
   async function copy(command: string) {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(command);
-    } catch {
-      window.prompt("Copy this command:", command);
-    }
+    if (await copyText(command, "Copy this command")) setCopied(command);
   }
   return (
     <div className="mt-2 space-y-1.5">
