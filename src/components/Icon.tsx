@@ -39,7 +39,8 @@ type Name =
   | "keyboard"
   | "info"
   | "palette"
-  | "command";
+  | "command"
+  | "swap";
 
 const PATHS: Record<Name, string> = {
   star: "M12 2.8l2.8 5.9 6.4.8-4.7 4.5 1.2 6.4L12 17.3l-5.7 3.1 1.2-6.4-4.7-4.5 6.4-.8z",
@@ -82,6 +83,7 @@ const PATHS: Record<Name, string> = {
   info: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M12 16v-4M12 8h.01",
   palette: "M12 22a10 10 0 1 1 10-10c0 2.2-1.8 3-3.5 3H17a2 2 0 0 0-1.5 3.3A2.2 2.2 0 0 1 12 22M7.5 11h.01M10.5 7h.01M15.5 8h.01",
   command: "M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3",
+  swap: "M16 3l4 4-4 4M20 7H4M8 21l-4-4 4-4M4 17h16",
 };
 
 type Props = { name: Name; size?: number; className?: string; strokeWidth?: number; fill?: boolean };

@@ -181,6 +181,16 @@ async function listMeta(): Promise<Meta[]> {
   return out.sort((a, b) => a.savedAt - b.savedAt);
 }
 
+/** The Claude accounts saved here, as account and organization ids with their labels (emails): the Claude app's chat folders use the same ids. */
+export async function savedClaudeAccounts(): Promise<{ accountUuid: string; organizationUuid: string; label: string }[]> {
+  return (await listMeta())
+    .filter((m) => m.provider === "claude" && m.key.includes(":"))
+    .map((m) => {
+      const [accountUuid, organizationUuid] = m.key.split(":");
+      return { accountUuid, organizationUuid, label: m.label };
+    });
+}
+
 async function getMeta(id: string): Promise<Meta> {
   const meta = (await listMeta()).find((m) => m.id === id);
   if (!meta) throw new Error("That saved login no longer exists.");

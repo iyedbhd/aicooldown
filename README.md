@@ -100,7 +100,7 @@ If you would rather not have your tokens pass through someone else's server at a
 
 ## Desktop app
 
-The website can only read your limits. On your own computer, AI Cooldown can also work with the Claude Code and Codex CLIs installed there: switch which account each one is logged in with, and say hello on a schedule so a 5-hour window starts before you need it. That is the [This machine](#this-machine-switch-cli-logins-and-start-the-5-hour-clock-early) section.
+The website can only read your limits. On your own computer, AI Cooldown can also work with the Claude Code and Codex CLIs installed there: switch which account each one is logged in with, and say hello on a schedule so a 5-hour window starts before you need it. That is the [This machine](#this-machine-switch-cli-logins-and-start-the-5-hour-clock-early) section, which also [copies the Claude app's chats](#this-machine-copy-claude-app-chats-between-accounts) from one account to another.
 
 The easiest way to get it is the desktop app: the dashboard in its own window, with its own icon, no browser and no setup. Download the installer for your system from the [latest release](https://github.com/iyedbhd/aicooldown/releases/latest).
 
@@ -207,6 +207,17 @@ When the app runs on your own computer (the [desktop app](#desktop-app), `npm ru
 Saved logins live in `cli-profiles/` and schedules in `local-schedules.json` inside the data folder (`./data`, the desktop app's `data` folder, or wherever `AICOOLDOWN_DATA_DIR` points), on your machine only. The section is never served on Vercel, and only answers requests from this computer: `npm run dev` and `npm start` listen on your network too, so every request's actual network peer is checked, not just its Host header. On a computer shared with other accounts, those accounts can reach it too. Claude switching needs the file-based login (`~/.claude/.credentials.json`, Windows and Linux); on macOS Claude Code keeps it in the Keychain instead.
 
 To tell Claude logins apart, the app asks Anthropic whose account each token is (the profile request Claude Code itself makes, once per token). The account named in `~/.claude.json` is not enough, because the Claude desktop app writes its own account there too. A login this can't identify, because its access token expired before the app saw it, is not saved or switched until you run `claude` once to refresh it.
+
+### This machine: copy Claude app chats between accounts
+
+The Claude desktop app keeps its Code tab's chats on your computer, a list per account (under `%APPDATA%\Claude` on Windows, `~/Library/Application Support/Claude` on macOS, `~/.config/Claude` on Linux). Signed in with another account, it shows that account's list only, so your chats seem gone, although they are all still there. **Claude app chats**, under This machine, lists each account's chats and copies or moves them to another.
+
+- **Copy or move chats…** asks which account to take chats from and which to put them in (the one signed in to Claude now, to start with), then which chats: search them, or **Select all** for every chat not already there. A copy is a new chat with its own copy of the conversation, its subagents, tool output and edit history, under new ids, so each carries on by itself. Connectors, remote control and published artifacts stay with the account they were set up in. **Move** copies, then takes the chats out of the account they were in.
+- **Undo**, on the notice after a copy or in the card's recent list, takes the copies away and puts moved chats back where they were. A copy you have worked in since stays.
+- **Nothing is copied twice by mistake**: each chat says which accounts it was copied to or from, and chats already in the other account are marked. An account shows its email once AI Cooldown has seen Claude signed in with it; name the others yourself.
+- **The Claude app reads its lists when it starts or switches account**, so copied chats show once you switch to that account in it, or reopen it. A chat worked in over the last few minutes, in the account the app is open with, may be written again by the app at any moment: it can be copied, and moved once it has been idle for a few minutes or the app is closed.
+
+What was copied where, and the chats moved away (kept for Undo), are in `claude-app-chats.json` and `claude-app-chats/` in the data folder. Chats in the app's Chat tab live on Anthropic's servers, per account, and can't be copied this way.
 
 ### Deploy
 

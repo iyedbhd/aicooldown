@@ -7,6 +7,7 @@ import { reloadLocalState, showLocalState, useLocalState, watchLocalState } from
 import type { SessionUser } from "@/lib/session";
 import type { Provider } from "@/lib/types";
 import { confirmAction, toast } from "@/lib/ui";
+import { ClaudeChats } from "./ClaudeChats";
 import { DesktopApp } from "./DesktopApp";
 import { DevicePanel } from "./DevicePanel";
 import { Icon } from "./Icon";
@@ -104,6 +105,7 @@ export function LocalPanel({ now, user }: { now: number; user: SessionUser | nul
           );
         })}
       </div>
+      <ClaudeChats now={now} />
     </section>
   );
 }

@@ -87,6 +87,8 @@ jobs:
           cat > notes.md <<'EOF'
           The AI Cooldown dashboard as an app on your own computer, with the **This machine** features the website cannot offer: switch which account the Claude Code and Codex CLIs are logged in with, and say hello on a schedule so a 5-hour window starts before you need it.
 
+          Switched accounts in the Claude app and your chats seem gone? The Claude app keeps a list of Code tab chats per account, all of them still on your computer. **Claude app chats**, under This machine, copies or moves them to the account you use now: a few, or all at once, each as a chat of its own that carries on by itself, with Undo.
+
           Sign in with your aicooldown.com account to see the same synced accounts as on the website, or stay a guest and keep everything on your computer. Signed in, **Connect this computer** puts it on the Team page with its Claude Code and Codex sessions, the projects they work on and their token usage, and its sessions on the first page under **Your sessions**. You choose there whether sessions may be started or continued on it from the browser, where every conversation opens as a chat with its images, and whether what its sessions say reaches the website (both off until you choose; a team member's computer always shows their team's owner and admins all of their work, while an owner or admin picks what the others see). From the website you can also switch its CLI logins and start a 5-hour window.
 
           | System | File | |

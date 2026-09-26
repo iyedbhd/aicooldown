@@ -70,7 +70,7 @@ export function Dashboard() {
   const openSettings = () => openShell({ settings: desktop ? "general" : "appearance" });
 
   return (
-    <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 titlebar:py-4">
+    <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 titlebar:pt-4 desktop:pb-24">
       <header className="border-b border-line pb-4">
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
           <div className="flex items-center gap-3 titlebar:hidden">
