@@ -12,6 +12,7 @@ import type { UsageState } from "@/lib/usage-client";
 import { Icon } from "./Icon";
 import { Menu, type MenuAnchor, type MenuItem } from "./Menu";
 import { PROVIDER_META, ProviderTile } from "./ProviderLogo";
+import { RefreshButton } from "./RefreshButton";
 import { WindowRow } from "./WindowRow";
 
 function tokenStatus(account: Account, now: number, synced: boolean, desktop: boolean): { text: string; warn: boolean } {
@@ -121,9 +122,14 @@ export function AccountCard({ account, state, history, now, synced, onRefresh, o
           <p className={`mt-0.5 font-mono text-[11px] ${token.warn ? "text-amber-600 dark:text-amber-300" : "text-faint"}`}>{token.text}</p>
         </div>
         <div className="flex shrink-0 gap-1">
-          <button type="button" onClick={onRefresh} disabled={loading} className="rounded-lg p-1.5 text-muted transition hover:bg-panel-3 hover:text-fg disabled:opacity-40" aria-label="Refresh usage" title="Refresh">
-            <Icon name="refresh" size={15} className={loading ? "spin" : undefined} />
-          </button>
+          <RefreshButton
+            label={`Refresh ${account.label}`}
+            busy={loading}
+            onRefresh={onRefresh}
+            updatedAt={usage ? new Date(usage.fetchedAt).getTime() : null}
+            now={now}
+            size={15}
+          />
           <button
             type="button"
             onClick={(e) => setMenu(menu ? null : { element: e.currentTarget })}

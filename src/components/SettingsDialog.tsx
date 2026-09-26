@@ -14,6 +14,7 @@ import { Icon, type IconName } from "./Icon";
 import { Mark } from "./Logo";
 import { CloseButton, Modal } from "./Modal";
 import { GitHubGlyph } from "./ProviderLogo";
+import { RefreshButton, useRefresh } from "./RefreshButton";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: IconName; desktopOnly?: boolean }[] = [
   { id: "general", label: "General", icon: "settings", desktopOnly: true },
@@ -401,6 +402,10 @@ function UpdateRow({ info }: { info: DesktopInfo }) {
   const { update } = info;
   const bridge = desktopApp();
   const [now] = useState(() => Date.now());
+  const [asking, check] = useRefresh(async () => {
+    await bridge?.action("check-updates");
+  });
+  const checking = asking || update.state === "checking";
   let text: string;
   let button: React.ReactNode = null;
   if (update.state === "ready") {
@@ -418,20 +423,17 @@ function UpdateRow({ info }: { info: DesktopInfo }) {
       </button>
     );
   } else if (update.state === "downloading") text = `Downloading version ${update.version}…`;
-  else if (update.state === "checking") text = "Checking for updates…";
-  else if (!info.installed) text = "This copy is not installed, so it does not update itself.";
+  else if (!info.installed && !checking) text = "This copy is not installed, so it does not update itself.";
   else {
-    text = update.error
-      ? `The last check failed: ${update.error}`
-      : update.checkedAt
-        ? `Up to date. Checked ${formatAgo(Math.max(0, now - update.checkedAt))}.`
-        : "Checks for updates every few hours.";
-    button = (
-      <button type="button" onClick={() => void bridge?.action("check-updates")} className="btn">
-        <Icon name="refresh" />
-        Check for updates
-      </button>
-    );
+    // The button stays where it is while it checks, turning.
+    text = checking
+      ? "Checking for updates…"
+      : update.error
+        ? `The last check failed: ${update.error}`
+        : update.checkedAt
+          ? `Up to date. Checked ${formatAgo(Math.max(0, now - update.checkedAt))}.`
+          : "Checks for updates every few hours.";
+    button = <RefreshButton text="Check for updates" label="Check for updates" busy={checking} onRefresh={() => void check()} />;
   }
   return (
     <SettingRow title="Updates" description={text}>

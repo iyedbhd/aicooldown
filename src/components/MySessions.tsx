@@ -7,6 +7,7 @@ import { fetchWorkspace, mayRunOn, unavailable, type Workspace } from "@/lib/tea
 import { allSessions, liveNow } from "@/lib/team-stats";
 import { ChatPanel, type ChatTarget } from "./ChatPanel";
 import { Icon } from "./Icon";
+import { RefreshButton, useRefresh } from "./RefreshButton";
 import { RunLine, SessionLine } from "./TeamSessions";
 
 /** How often the list is read again while the page is in view: only for someone with a computer connected. */
@@ -22,12 +23,19 @@ const SHOWN = 6;
  */
 export function MySessions({ user, now }: { user: SessionUser | null; now: number }) {
   const [ws, setWs] = useState<Workspace | null>(null);
+  /** When the list on screen was read. */
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
   const [chat, setChat] = useState<ChatTarget | null>(null);
 
+  /** Reads the list again; returns why it could not. */
   const load = useCallback(async () => {
     const res = await fetchWorkspace("me");
-    if (res.ok) setWs(res.data);
+    if (!res.ok) return res.error;
+    setWs(res.data);
+    setLoadedAt(Date.now());
+    return null;
   }, []);
+  const [refreshing, refresh] = useRefresh(load);
 
   useEffect(() => {
     if (!user) return;
@@ -35,7 +43,10 @@ export function MySessions({ user, now }: { user: SessionUser | null; now: numbe
     let poll: ReturnType<typeof setInterval> | undefined;
     const read = async () => {
       const res = await fetchWorkspace("me");
-      if (alive && res.ok) setWs(res.data);
+      if (alive && res.ok) {
+        setWs(res.data);
+        setLoadedAt(Date.now());
+      }
       return res.ok ? res.data : null;
     };
     void read().then((first) => {
@@ -71,6 +82,7 @@ export function MySessions({ user, now }: { user: SessionUser | null; now: numbe
           )}
         </h2>
         <div className="flex items-center gap-2">
+          <RefreshButton label="Refresh your sessions" busy={refreshing} onRefresh={() => void refresh()} updatedAt={loadedAt} now={now} />
           <Link href="/team?team=me&tab=sessions" className="btn">
             All sessions
           </Link>

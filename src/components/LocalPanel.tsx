@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { formatAgo, formatCountdown, formatDateTime, formatPlan } from "@/lib/format";
 import { localAction, type CliProfile, type LocalAction, type LocalState, type ScheduleMode } from "@/lib/local";
-import { reloadLocalState, showLocalState, useLocalState, watchLocalState } from "@/lib/local-watch";
+import { localStateReadAt, reloadLocalState, showLocalState, useLocalState, watchLocalState } from "@/lib/local-watch";
 import type { SessionUser } from "@/lib/session";
 import type { Provider } from "@/lib/types";
 import { confirmAction, toast } from "@/lib/ui";
@@ -12,6 +12,7 @@ import { DesktopApp } from "./DesktopApp";
 import { DevicePanel } from "./DevicePanel";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
+import { RefreshButton, useRefresh } from "./RefreshButton";
 
 const CLI_NAME: Record<Provider, string> = { claude: "Claude Code CLI", codex: "Codex CLI" };
 const NOT_SIGNED_IN: Record<Provider, string> = {
@@ -41,6 +42,7 @@ export function LocalPanel({ now, user }: { now: number; user: SessionUser | nul
   /** undefined until the first answer, null when this copy does not run on the user's computer. */
   const state = useLocalState();
   const [busy, setBusy] = useState<string | null>(null);
+  const [refreshing, refresh] = useRefresh(async () => ((await reloadLocalState()) ? null : "this computer's AI Cooldown server did not answer."));
 
   // Scheduled hellos and remote sessions run on the server; this picks up their results (lib/local-watch.ts). Nothing is polled on the website.
   useEffect(() => watchLocalState(), []);
@@ -63,7 +65,17 @@ export function LocalPanel({ now, user }: { now: number; user: SessionUser | nul
 
   return (
     <section className="mt-8">
-      <h2 className="mb-1 text-sm font-medium text-muted">This machine</h2>
+      <div className="mb-1 flex items-center gap-1">
+        <h2 className="text-sm font-medium text-muted">This machine</h2>
+        <RefreshButton
+          label="Refresh this machine"
+          busy={refreshing}
+          onRefresh={() => void refresh()}
+          updatedAt={localStateReadAt()}
+          now={now}
+          size={13}
+        />
+      </div>
       <p className="mb-3 text-xs text-faint">
         Only in a copy running on your computer. Connect it to your account and team, switch the login the Claude Code and Codex CLIs use in your terminal, or
         say hello to start a 5-hour window now so it resets sooner.

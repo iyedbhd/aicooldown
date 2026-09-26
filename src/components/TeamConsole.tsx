@@ -25,6 +25,7 @@ import { AuthDialog } from "./AuthDialog";
 import { ChatPanel, type ChatTarget } from "./ChatPanel";
 import { Icon } from "./Icon";
 import { Mark, Wordmark } from "./Logo";
+import { RefreshButton, useRefresh } from "./RefreshButton";
 import { RoleBadge } from "./TeamBits";
 import { TeamComputers } from "./TeamComputers";
 import { TeamOverview } from "./TeamOverview";
@@ -128,6 +129,8 @@ export function TeamConsole() {
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [scope, setScope] = useState<string | null>(null);
   const [ws, setWs] = useState<Workspace | null>(null);
+  /** When the workspace on screen was read. */
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [period, setPeriod] = useState<Period>(7);
@@ -155,6 +158,7 @@ export function TeamConsole() {
   const choose = useCallback((next: string) => {
     if (scopeRef.current !== next) {
       setWs(null);
+      setLoadedAt(null);
       setFilter(NO_FILTER);
       setChat(null);
     }
@@ -179,6 +183,7 @@ export function TeamConsole() {
     if (scopeRef.current !== target) return; // switched meanwhile
     if (res.ok) {
       setWs(res.data);
+      setLoadedAt(Date.now());
       setError(null);
     } else if (res.code === "signed_out") {
       setUser(null);
@@ -227,6 +232,8 @@ export function TeamConsole() {
   const reload = useCallback(async () => {
     await Promise.all([loadWorkspace(), refreshTeams()]);
   }, [loadWorkspace, refreshTeams]);
+  /** Asked for: the button, Ctrl+R, the palette. A failure shows in the page's own message. */
+  const [refreshing, refresh] = useRefresh(reload);
 
   /** Shares or stops sharing some of your work with the other owners and admins of your teams. */
   const share = useCallback(
@@ -292,7 +299,7 @@ export function TeamConsole() {
   const desktop = useDesktop();
 
   useCommands("team", () => [
-    ...(user ? [{ id: "refresh", title: "Refresh the team", group: "Team", icon: "refresh" as const, shortcut: desktop ? "Ctrl+R" : undefined, keywords: "reload", run: () => void reload() }] : []),
+    ...(user ? [{ id: "refresh", title: "Refresh the team", group: "Team", icon: "refresh" as const, shortcut: desktop ? "Ctrl+R" : undefined, keywords: "reload", run: () => void refresh() }] : []),
     ...(ws
       ? TABS.map((t) => ({ id: `team-tab:${t.id}`, title: `Team: ${t.label}`, group: "Team", icon: t.icon, keywords: "tab section", run: () => setTab(t.id) }))
       : []),
@@ -450,7 +457,18 @@ export function TeamConsole() {
                 </button>
               ))}
             </div>
-            <div className="mb-2 flex items-center gap-2">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              {ws && (
+                <RefreshButton
+                  label={ws.team ? "Refresh the team" : "Refresh"}
+                  busy={refreshing}
+                  onRefresh={() => void refresh()}
+                  updatedAt={loadedAt}
+                  now={now}
+                  showAge
+                  shortcut={desktop ? "Ctrl+R" : undefined}
+                />
+              )}
               {canChat && (
                 <button type="button" onClick={() => newChat()} className="btn btn-primary">
                   <Icon name="terminal" />
@@ -476,7 +494,14 @@ export function TeamConsole() {
           </div>
 
           <div className="mt-5">
-            {error && <p className="mb-4 rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-700 dark:text-rose-200">{error}</p>}
+            {error && (
+              <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-700 dark:text-rose-200">
+                <span className="min-w-0">
+                  {ws ? "Couldn't refresh" : "Couldn't load"}: {error}
+                </span>
+                <RefreshButton text="Try again" label="Try again" busy={refreshing} onRefresh={() => void refresh()} />
+              </div>
+            )}
             {!ws && !error && (
               <div className="space-y-3" aria-label="Loading">
                 <div className="shimmer h-24 rounded-2xl" />

@@ -17,6 +17,7 @@ import { Mark, Wordmark } from "./Logo";
 import { MySessions } from "./MySessions";
 import { Overview } from "./Overview";
 import { GitHubGlyph, ProviderTile } from "./ProviderLogo";
+import { RefreshButton } from "./RefreshButton";
 import { ResetTimeline } from "./ResetTimeline";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -123,16 +124,16 @@ export function Dashboard() {
               <Icon name={copied ? "check" : "copy"} />
               {copied ? "Copied" : "Copy status"}
             </button>
-            <button
-              type="button"
-              onClick={() => engine.refresh()}
-              disabled={anyLoading || accounts.length === 0}
-              title={desktop ? "Refresh every account (Ctrl+R)" : "Refresh every account"}
-              className={btn}
-            >
-              <Icon name="refresh" className={anyLoading ? "spin" : undefined} />
-              Refresh
-            </button>
+            <RefreshButton
+              text="Refresh"
+              label="Refresh every account"
+              busy={anyLoading}
+              onRefresh={() => engine.refresh()}
+              disabled={accounts.length === 0}
+              shortcut={desktop ? "Ctrl+R" : undefined}
+              updatedAt={freshest}
+              now={now}
+            />
             <button type="button" onClick={() => openShell("add")} title={desktop ? "Add account (Ctrl+N)" : undefined} className={btnPrimary}>
               <Icon name="plus" />
               Add account

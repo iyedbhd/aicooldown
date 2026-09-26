@@ -18,6 +18,7 @@ import { toast } from "@/lib/ui";
 import { Icon } from "./Icon";
 import { CloseButton, Modal } from "./Modal";
 import { ProviderGlyph } from "./ProviderLogo";
+import { RefreshButton, useRefresh } from "./RefreshButton";
 
 const key = (p: ChatPlace) => `${p.account}/${p.org}`;
 
@@ -53,25 +54,39 @@ async function act(body: ClaudeChatsAction) {
 export function ClaudeChats({ now }: { now: number }) {
   /** undefined until known; null where this copy cannot see the app's chats (the website). */
   const [state, setState] = useState<ClaudeAppState | null | undefined>(undefined);
+  /** When the lists on screen were read. */
+  const [readAt, setReadAt] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
   const [naming, setNaming] = useState<{ account: string; draft: string } | null>(null);
 
-  async function load() {
+  /** Every answer carries the lists as they are now: a read's, or an action's. */
+  const show = useCallback((next: ClaudeAppState) => {
+    setState(next);
+    setReadAt(Date.now());
+  }, []);
+
+  const [refreshing, refresh] = useRefresh(async () => {
     const next = await fetchClaudeChats();
-    if (next) setState(next);
-  }
+    if (!next) return "the Claude app's folders could not be read.";
+    show(next);
+    return null;
+  });
 
   useEffect(() => {
     let alive = true;
-    void fetchClaudeChats().then((first) => alive && setState(first));
+    void fetchClaudeChats().then((first) => {
+      if (!alive) return;
+      if (first) show(first);
+      else setState(null);
+    });
     // Switching account in the Claude app, then coming back here: the counts follow.
-    const onFocus = () => void fetchClaudeChats().then((next) => alive && next && setState(next));
+    const onFocus = () => void fetchClaudeChats().then((next) => alive && next && show(next));
     window.addEventListener("focus", onFocus);
     return () => {
       alive = false;
       window.removeEventListener("focus", onFocus);
     };
-  }, []);
+  }, [show]);
 
   const places = state?.places ?? [];
   const usable = places.length >= 2;
@@ -94,7 +109,7 @@ export function ClaudeChats({ now }: { now: number }) {
   async function undo(operation: string) {
     const data = await act({ action: "undo", operation });
     if (!data) return;
-    setState(data.state);
+    show(data.state);
     const kept = data.result?.kept ?? 0;
     toast(
       kept > 0
@@ -108,7 +123,7 @@ export function ClaudeChats({ now }: { now: number }) {
     const { account, draft } = naming;
     setNaming(null);
     const data = await act({ action: "name", account, name: draft.trim() || null });
-    if (data) setState(data.state);
+    if (data) show(data.state);
   }
 
   if (!state?.found) return null;
@@ -121,9 +136,7 @@ export function ClaudeChats({ now }: { now: number }) {
           Claude app chats
         </span>
         <div className="flex items-center gap-2">
-          <button type="button" onClick={() => void load()} className="rounded-lg p-1.5 text-muted transition hover:bg-panel-3 hover:text-fg" aria-label="Read the chats again" title="Read again">
-            <Icon name="refresh" size={14} />
-          </button>
+          <RefreshButton label="Read the chats again" busy={refreshing} onRefresh={() => void refresh()} updatedAt={readAt} now={now} />
           <button type="button" onClick={() => setOpen(true)} disabled={!usable} className="btn btn-primary">
             <Icon name="copy" />
             Copy or move chats…
@@ -207,7 +220,7 @@ export function ClaudeChats({ now }: { now: number }) {
           is closed.
         </p>
       )}
-      {open && usable && <ChatsDialog state={state} now={now} onState={setState} onUndo={(op) => void undo(op)} onClose={() => setOpen(false)} />}
+      {open && usable && <ChatsDialog state={state} now={now} onState={show} onUndo={(op) => void undo(op)} onClose={() => setOpen(false)} />}
     </div>
   );
 }

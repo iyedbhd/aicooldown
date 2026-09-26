@@ -14,6 +14,8 @@ const REFRESH_MS = 30_000;
 
 /** undefined until the first answer, null when this copy does not run on the user's computer. */
 let state: LocalState | null | undefined;
+/** When `state` was read. */
+let readAt = 0;
 const listeners = new Set<() => void>();
 /** Remote sessions already seen, so each new one someone else starts here is announced once. */
 let seen: Set<string> | null = null;
@@ -34,18 +36,23 @@ export function showLocalState(next: LocalState): void {
   }
   seen = new Set(next.device.recent.map((r) => r.id));
   state = next;
+  readAt = Date.now();
   emit();
 }
 
-/** Reads it again. A failed read keeps what is on screen. */
-export async function reloadLocalState(): Promise<void> {
+/** Reads it again; returns whether it could. A failed read keeps what is on screen. */
+export async function reloadLocalState(): Promise<boolean> {
   const next = await fetchLocalState();
   if (next) showLocalState(next);
   else if (state === undefined) {
     state = null;
     emit();
   }
+  return next !== null;
 }
+
+/** When what useLocalState gives was read: it changes with every read, so this is current wherever that is used. */
+export const localStateReadAt = () => readAt;
 
 /** Keeps it fresh while anyone watches; nothing is polled where there is no local server (the website). */
 export function watchLocalState(): () => void {

@@ -36,6 +36,7 @@ import {
 import { sourceLabel, type SessionRow } from "@/lib/team-stats";
 import { Icon } from "./Icon";
 import { ProviderGlyph } from "./ProviderLogo";
+import { RefreshButton, useRefresh } from "./RefreshButton";
 import { ImageGallery, ImageProvider, Lightbox, SessionImage, useImageLoader } from "./SessionImages";
 import { ShareMenu } from "./ShareMenu";
 import { StatusChip } from "./TeamBits";
@@ -336,6 +337,7 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
     setTranscript(res.data);
     setAsked((n) => n + 1);
   }
+  const [reading, readNow] = useRefresh(readAgain);
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // Enter sends and Shift+Enter starts a new line, except on touch screens, where the button sends.
@@ -379,6 +381,15 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
               )}
             </div>
             <div className="flex shrink-0 items-center gap-1">
+              {readable && sessionId && (
+                <RefreshButton
+                  label={`Read the conversation again from ${device?.name ?? "the computer"}`}
+                  busy={reading || transcript?.status === "pending"}
+                  onRefresh={() => void readNow()}
+                  updatedAt={transcript?.status === "ready" ? transcript.updatedAt : null}
+                  now={now}
+                />
+              )}
               {shareable && session && <ShareMenu ws={ws} kind="session" item={session.key} project={session.project} onShare={onShare} />}
               {session && (
                 <button type="button" onClick={() => setDetails((d) => !d)} aria-expanded={details} className="rounded-lg px-2 py-1 text-[11px] text-muted hover:bg-panel-2 hover:text-fg">
@@ -444,7 +455,7 @@ export function ChatPanel({ ws, sessions, now, target, onClose, onChanged, onSha
           )}
           {transcript?.status === "failed" && transcript.error && <EventLine event={{ seq: -1, at: 0, kind: "error", text: transcript.error }} />}
           {transcript && transcript.status !== "pending" && (
-            <button type="button" onClick={() => void readAgain()} className="flex items-center gap-1.5 font-mono text-[11px] text-faint hover:text-fg">
+            <button type="button" onClick={() => void readNow()} className="flex items-center gap-1.5 font-mono text-[11px] text-faint hover:text-fg">
               <Icon name="refresh" size={11} /> read {transcript.status === "ready" ? `${formatAgo(now - transcript.updatedAt)}; read it again` : "it again"}
             </button>
           )}
