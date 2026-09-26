@@ -50,15 +50,22 @@ const INBOX = process.platform === "win32" ? /^\\\\[.?]\\pipe\\(?:LOCAL\\)?cc-ms
 const MAX_FILE = 64 * 1024;
 const SEND_MS = 5_000;
 
-const sessionsDir = () => path.join(/* turbopackIgnore: true */ livePlace("claude").dir, "sessions");
+/**
+ * A path to the user's own files, only known at run time. Kept out of the
+ * build's file tracing, which takes paths it cannot work out for wildcards and
+ * would pack whatever project files match them into the app.
+ */
+const at = (...parts: string[]) => path.join(/* turbopackIgnore: true */ ...parts);
+
+const sessionsDir = () => at(livePlace("claude").dir, "sessions");
 
 const str = (v: unknown, max = 200) => (typeof v === "string" && v ? v.slice(0, max) : null);
 
 async function readSmall(file: string): Promise<{ json: Record<string, unknown>; mtimeMs: number } | null> {
   try {
-    const info = await stat(file);
+    const info = await stat(/* turbopackIgnore: true */ file);
     if (!info.isFile() || info.size > MAX_FILE) return null;
-    const json: unknown = JSON.parse(await readFile(file, "utf8"));
+    const json: unknown = JSON.parse(await readFile(/* turbopackIgnore: true */ file, "utf8"));
     return json && typeof json === "object" && !Array.isArray(json) ? { json: json as Record<string, unknown>, mtimeMs: info.mtimeMs } : null;
   } catch {
     return null;
@@ -79,10 +86,10 @@ function running(pid: number): boolean {
 export async function liveSessions(): Promise<LiveSession[]> {
   const dir = sessionsDir();
   const found: LiveSession[] = [];
-  for (const name of await readdir(dir).catch(() => [] as string[])) {
+  for (const name of await readdir(/* turbopackIgnore: true */ dir).catch(() => [] as string[])) {
     const pid = Number(RECORD.exec(name)?.[1]);
     if (!pid) continue;
-    const r = (await readSmall(path.join(dir, name)))?.json;
+    const r = (await readSmall(at(dir, name)))?.json;
     const inbox = str(r?.messagingSocketPath);
     if (!r || r.pid !== pid || typeof r.sessionId !== "string" || !SESSION_ID.test(r.sessionId) || !inbox || !INBOX.test(inbox) || !running(pid)) continue;
     const startedAt = typeof r.startedAt === "number" ? r.startedAt : 0;
@@ -98,7 +105,7 @@ export async function liveSession(id: string): Promise<LiveSession | null> {
 
 /** What session `s` does now; null once its process has stopped. */
 export async function sessionState(s: LiveSession): Promise<SessionState | null> {
-  const r = (await readSmall(path.join(sessionsDir(), `${s.pid}.json`)))?.json;
+  const r = (await readSmall(at(sessionsDir(), `${s.pid}.json`)))?.json;
   if (!r || r.pid !== s.pid || str(r.procStart) !== s.procStart || !running(s.pid)) return null;
   return {
     sessionId: str(r.sessionId),
@@ -116,9 +123,9 @@ export async function sessionState(s: LiveSession): Promise<SessionState | null>
 async function inboxKey(s: LiveSession): Promise<string> {
   const dir = sessionsDir();
   const keys: { token: string; procStart: string | null; mtimeMs: number }[] = [];
-  for (const name of await readdir(dir).catch(() => [] as string[])) {
+  for (const name of await readdir(/* turbopackIgnore: true */ dir).catch(() => [] as string[])) {
     if (Number(KEY.exec(name)?.[1]) !== s.pid) continue;
-    const file = await readSmall(path.join(dir, name));
+    const file = await readSmall(at(dir, name));
     const token = file?.json.peerToken;
     if (file && typeof token === "string" && HEX32.test(token)) keys.push({ token, procStart: str(file.json.procStart), mtimeMs: file.mtimeMs });
   }
@@ -175,7 +182,7 @@ function write(inbox: string, lines: string): Promise<void> {
 export async function sendMessage(s: LiveSession, text: string, from: string): Promise<void> {
   const token = await inboxKey(s);
   // The socket Claude Code made, not a link to somewhere else.
-  if (process.platform !== "win32" && !(await lstat(s.inbox).then((i) => i.isSocket(), () => false))) throw new Error("its session is no longer running");
+  if (process.platform !== "win32" && !(await lstat(/* turbopackIgnore: true */ s.inbox).then((i) => i.isSocket(), () => false))) throw new Error("its session is no longer running");
   const message = { msgV: 1, msg_id: randomUUID(), type: "user", message: { role: "user", content: envelope(text, from) }, priority: "next" };
   const lines = `${JSON.stringify({ type: "auth", token })}\n${JSON.stringify(message)}\n`;
   for (let attempt = 1; ; attempt++) {

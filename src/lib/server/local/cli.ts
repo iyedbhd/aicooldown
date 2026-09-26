@@ -422,7 +422,7 @@ function commandLines(): Promise<string> {
       ? ["powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }"]]
       : ["ps", ["-axww", "-o", "command="]];
   return new Promise((resolve) => {
-    execFile(bin, args, { timeout: 15_000, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (err, out) => resolve(err ? "" : String(out)));
+    execFile(/* turbopackIgnore: true */ bin, args, { timeout: 15_000, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (err, out) => resolve(err ? "" : String(out)));
   });
 }
 

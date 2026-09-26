@@ -141,7 +141,7 @@ export async function runInbox(job: RunJob, chat: OpenChat, report: Reporter, st
   };
 
   try {
-    offset = (await stat(chat.log)).size;
+    offset = (await stat(/* turbopackIgnore: true */ chat.log)).size;
     passing = (await sessionState(chat.session))?.status === "idle";
     await sendMessage(chat.session, job.prompt, chat.from);
     sent = Date.now();
