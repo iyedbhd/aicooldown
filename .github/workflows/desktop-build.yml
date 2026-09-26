@@ -1,0 +1,47 @@
+# Builds the desktop app's installer on one system and checks that it
+# installs and starts: what desktop.yml runs for Windows first, then the rest.
+name: Desktop build
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: The runner to build on; its installer is uploaded as an artifact named after it.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ inputs.os }}
+    # A build takes a few minutes; one that hangs fails, to be run again, rather than hold the release for hours.
+    timeout-minutes: 30
+    steps:
+      # Actions are pinned to commits: whatever runs here ends up inside the app.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Check the tag matches package.json
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - run: npm run desktop
+      - name: Install and start the app, then ask it for the local features
+        # Under a minute normally; v0.12.0's hung on an Apple Silicon runner for hours.
+        timeout-minutes: 5
+        shell: bash
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a ' || '' }}node desktop/smoke.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.os }}
+          path: |
+            dist/aicooldown-*.exe
+            dist/aicooldown-*.dmg
+            dist/aicooldown-*.AppImage
+            dist/latest*.yml
+          if-no-files-found: error
